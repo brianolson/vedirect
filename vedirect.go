@@ -1,17 +1,19 @@
 // go get github.com/brianolson/vedirect
+//
+// with learnings from https://github.com/karioja/vedirect by Janne Kario
 
 package vedirect
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"os"
 	"sync"
-	"syscall"
 
-	"golang.org/x/sys/unix"
+	"github.com/tarm/serial"
 )
 
 type vedState int
@@ -32,6 +34,8 @@ const (
 type Vedirect struct {
 	fin io.Reader
 
+	dout io.Writer
+
 	ctx context.Context
 
 	bytesSum uint
@@ -49,8 +53,30 @@ type Vedirect struct {
 	wg *sync.WaitGroup
 }
 
-func New(fin io.Reader, out chan<- map[string]string, wg *sync.WaitGroup, ctx context.Context) *Vedirect {
-	v := new(Vedirect)
+// Open
+// wg may be nil
+// debugOut may be nil
+func Open(path string, out chan<- map[string]string, wg *sync.WaitGroup, ctx context.Context, debugOut io.Writer) (v *Vedirect, err error) {
+	v = new(Vedirect)
+	v.dout = debugOut
+	st, err := os.Stat(path)
+	if err != nil {
+		v.debug("%s: could not stat, %v", path, err)
+		return nil, err
+	}
+	var fin io.Reader
+	if (st.Mode() & charDevice) == charDevice {
+		v.debug("%s: is char device", path)
+		sc := serial.Config{Name: path, Baud: 19200}
+		fin, err = serial.OpenPort(&sc)
+	} else {
+		v.debug("%s: is not char device, assuming debug file capture")
+		fin, err = os.OpenFile(path, os.O_RDONLY, 0777)
+	}
+	if err != nil {
+		v.debug("%s: could not open, %v", path, err)
+		return nil, err
+	}
 	v.ctx = ctx
 	if v.ctx == nil {
 		v.ctx = context.Background()
@@ -61,13 +87,16 @@ func New(fin io.Reader, out chan<- map[string]string, wg *sync.WaitGroup, ctx co
 	if v.wg == nil {
 		v.wg = new(sync.WaitGroup)
 	}
-	return v
-}
-
-func (v *Vedirect) Start() error {
 	v.wg.Add(1)
 	go v.readThread()
-	return nil
+	return v, nil
+}
+
+func (v *Vedirect) debug(msg string, args ...interface{}) {
+	if v.dout == nil {
+		return
+	}
+	fmt.Fprintf(v.dout, msg+"\n", args...)
 }
 
 type fdFile interface {
@@ -80,37 +109,10 @@ type statFile interface {
 
 const charDevice = fs.ModeDevice | fs.ModeCharDevice
 
-func (v *Vedirect) start() error {
-	fds, ok := v.fin.(statFile)
-	if !ok {
-		// cannot stat, don't try to ioctl()
-		return nil
-	}
-	st, err := fds.Stat()
-	if err != nil {
-		return err
-	}
-	if st.Mode().IsRegular() {
-		return nil
-	}
-	if (st.Mode() & charDevice) == charDevice {
-		fdf, ok := v.fin.(fdFile)
-		if !ok {
-			// nothing to do
-			return nil
-		}
-		fd := int(fdf.Fd())
-		tt, err := unix.IoctlGetTermios(fd, unix.TCGETA)
-		if err != nil {
-			return err
-		}
-		tt.Ispeed = syscall.B19200
-		tt.Ospeed = syscall.B19200
-		return unix.IoctlSetTermios(fd, unix.TCSETA, tt)
-	}
-	return nil
-}
-
+// handle achieves parsing VE.Direct status messages
+// lines are mostly text except Checksum byte:
+// "{key}\t{value}\r\n"
+// "Checksum\t{cs byte}\r\n"
 func (v *Vedirect) handle(b uint8) {
 	if b == hexmarker && v.state != inChecksum {
 		v.state = hex
@@ -164,7 +166,10 @@ func (v *Vedirect) handle(b uint8) {
 }
 
 func (v *Vedirect) readThread() {
-	//defer v.fin.Close()
+	fc, ok := v.fin.(io.Closer)
+	if ok {
+		defer fc.Close()
+	}
 	if v.wg != nil {
 		defer v.wg.Done()
 	}
@@ -178,6 +183,7 @@ func (v *Vedirect) readThread() {
 		}
 		n, err := v.fin.Read(buf)
 		if err != nil {
+			// TODO: capture error back to Vedirect.err or something?
 			log.Printf("ve read err: %v", err)
 			close(v.out)
 			return

@@ -1,3 +1,9 @@
+// vedump should demonstrate connection to a VE.Direct device
+//
+// Most VE.Direct devices now default to printing a status message
+// about once per second, and this utility will parse that and print a
+// json message to stdout.
+
 package main
 
 import (
@@ -11,17 +17,28 @@ import (
 	"github.com/brianolson/vedirect"
 )
 
+var verbose bool
+
+func debug(msg string, args ...interface{}) {
+	if !verbose {
+		return
+	}
+	fmt.Fprintf(os.Stderr, msg+"\n", args...)
+}
+
 func main() {
+	flag.BoolVar(&verbose, "v", false, "verbose debug out")
 	flag.Parse()
 	argv := flag.Args()
 	fname := argv[0]
 	recChan := make(chan map[string]string, 10)
-	fin, err := os.Open(fname)
-	maybefail(err, "%s: could not open, %v", fname, err)
 	var wg sync.WaitGroup
-	ve := vedirect.New(fin, recChan, &wg, context.Background())
-	err = ve.Start()
-	maybefail(err, "%s: start err, %v", fname, err)
+	dout := os.Stderr
+	if !verbose {
+		dout = nil
+	}
+	_, err := vedirect.Open(fname, recChan, &wg, context.Background(), dout)
+	maybefail(err, "%s: Vedirect Open, %v", fname, err)
 	for rec := range recChan {
 		blob, err := json.MarshalIndent(rec, "", "  ")
 		maybefail(err, "json encode err, %v", err)
