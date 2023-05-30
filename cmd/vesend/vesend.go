@@ -91,7 +91,7 @@ func main() {
 	flag.StringVar(&devicePath, "dev", "", "device to read")
 	flag.DurationVar(&retryPeriod, "retry", 60*time.Second, "Duration between retries")
 	flag.BoolVar(&verbose, "v", false, "verbose debug out")
-	flag.BoolVar(&sendJsonGzip, "z", false, "sent application/gzip compress of json")
+	flag.BoolVar(&sendJsonGzip, "z", true, "sent application/gzip compress of json")
 	flag.Parse()
 	if postUrl == "" {
 		fmt.Fprintf(os.Stderr, "-post URL is required\n")
@@ -215,7 +215,7 @@ func sendThread(url string, in, out chan sendRequest, wg *sync.WaitGroup) {
 		}
 		if req.err != nil {
 			waitTime := req.start.Add(retryPeriod).Sub(time.Now())
-			debug("post err, sleep %s", waitTime)
+			debug("post err %v, sleep %s", req.err, waitTime)
 			time.Sleep(waitTime)
 		}
 		out <- req
