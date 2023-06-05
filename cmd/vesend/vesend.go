@@ -15,8 +15,8 @@ import (
 	"github.com/brianolson/vedirect"
 )
 
-func recDiff(a, b map[string]string) map[string]interface{} {
-	d := make(map[string]interface{}, len(b))
+func recDiff(a, b map[string]string) map[string]string {
+	d := make(map[string]string, len(b))
 	for ak, av := range a {
 		bv, ok := b[ak]
 		if ok {
@@ -26,7 +26,7 @@ func recDiff(a, b map[string]string) map[string]interface{} {
 			} // else no change
 		} else {
 			// not present in b
-			d[ak] = nil
+			//d[ak] = nil
 		}
 	}
 	for bk, bv := range b {
@@ -39,25 +39,22 @@ func recDiff(a, b map[string]string) map[string]interface{} {
 	return d
 }
 
-func makeDeltas(batch []map[string]string, deltas []map[string]interface{}, times []int64, sendPeriod int) []map[string]interface{} {
+func makeDeltas(batch []map[string]string, deltas []map[string]interface{}, sendPeriod int) []map[string]interface{} {
 	pos := len(deltas)
 	if deltas == nil {
 		deltas = make([]map[string]interface{}, 0, len(batch))
 	}
 	for ; pos < len(batch); pos++ {
-		var nrec map[string]interface{}
+		var nrec map[string]string
 		if (pos % sendPeriod) == 0 {
-			nrec = make(map[string]interface{}, len(batch[pos]))
+			nrec = make(map[string]string, len(batch[pos]))
 			for k, v := range batch[pos] {
 				nrec[k] = v
 			}
 		} else {
 			nrec = recDiff(batch[pos-1], batch[pos])
 		}
-		if pos < len(times) {
-			nrec["_t"] = times[pos]
-		}
-		deltas = append(deltas, nrec)
+		deltas = append(deltas, vedirect.ParseRecord(nrec))
 	}
 	return deltas
 }
@@ -109,17 +106,17 @@ func main() {
 	}
 	recChan := make(chan map[string]string, 10)
 	var wg sync.WaitGroup
-	_, err := vedirect.Open(devicePath, recChan, &wg, context.Background(), dout)
+	_, err := vedirect.Open(devicePath, recChan, &wg, context.Background(), dout, vedirect.AddTime)
 	maybefail(err, "%s: Open, %v", devicePath, err)
 	wg.Add(1)
 	go mainThread(recChan, &wg)
 	wg.Wait()
 }
 
+// receive data from Vedirect parser, sometimes poke the sendThread.
 func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	batch := make([]map[string]string, 0, sendPeriod)
-	batchTimes := make([]int64, 0, sendPeriod)
 	sendActive := false
 	reqStart := make(chan sendRequest, 1)
 	reqReturn := make(chan sendRequest, 1)
@@ -135,11 +132,10 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 			}
 			now := time.Now()
 			batch = append(batch, rec)
-			batchTimes = append(batchTimes, now.UnixMilli())
 			if len(batch) >= sendPeriod && !sendActive {
 				debug("try send %d recs", len(batch))
 				msg := Message{
-					Data: makeDeltas(batch, nil, batchTimes, sendPeriod),
+					Data: makeDeltas(batch, nil, sendPeriod),
 				}
 				reqStart <- sendRequest{msg: &msg, start: now}
 				sendActive = true
@@ -155,13 +151,11 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 				newLast := len(batch) - oldLast
 				copy(batch, batch[oldLast:])
 				batch = batch[:newLast]
-				copy(batchTimes, batchTimes[oldLast:])
-				batchTimes = batchTimes[:newLast]
 				sendActive = false
 			} else {
 				// grow the batch more, retry
 				debug("send err %v", req.err)
-				req.msg.Data = makeDeltas(batch, req.msg.Data, batchTimes, sendPeriod)
+				req.msg.Data = makeDeltas(batch, req.msg.Data, sendPeriod)
 				debug("retry send %d recs", len(req.msg.Data))
 				req.err = nil
 				req.start = time.Now()
@@ -185,6 +179,7 @@ func compress(blob []byte) (zb []byte, err error) {
 	return ob.Bytes(), nil
 }
 
+// serialize data as json, http send it, note status
 func sendThread(url string, in, out chan sendRequest, wg *sync.WaitGroup) {
 	if wg != nil {
 		defer wg.Done()
