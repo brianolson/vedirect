@@ -2,6 +2,7 @@ package vedirect
 
 import (
 	"bufio"
+	"math"
 	"strings"
 )
 
@@ -22,18 +23,132 @@ type StreamingSummary struct {
 	binnedSummaries  [][]map[string]interface{}
 	summaryChunkSize int // ~500
 
+	// time.Time.Unix() after which the next bin starts
+	bs0LimitUnix int64
+
 	// rawRecent holds a few bins of raw data
 	// [N][BinSeconds]map[string]interface{}
+	// rawRecent[0] is currently-building recent records
 	rawRecent [][]map[string]interface{}
 	rawCache  int // ~10
+
+	// time.Time.Unix() after which the next bin starts
+	binLimitUnix int64
 }
 
 func (sum *StreamingSummary) Add(rec map[string]interface{}) {
+	rec_tx, ok := rec["_t"]
+	if !ok {
+		// WARNING ERROR ETC, cannot add without time
+		return
+	}
+	rec_t, ok := rec_tx.(int64)
+	if !ok {
+		// WARNING ERROR ETC, cannot add without time
+		return
+	}
+
+	if sum.rawRecent == nil {
+		if sum.rawCache == 0 {
+			sum.rawCache = 10
+		}
+		sum.rawRecent = make([][]map[string]interface{}, 1, sum.rawCache)
+		sum.startRR0(rec, rec_t)
+		return
+	}
+	if (rec_t / 1000) > sum.binLimitUnix {
+		// next bin!
+		sum.addSum(summarize(sum.rawRecent[0]))
+		sum.rotateRawRecent()
+		sum.startRR0(rec, rec_t)
+		return
+	}
+	sum.rawRecent[0] = append(sum.rawRecent[0], rec)
+}
+
+func (sum *StreamingSummary) startRR0(rec map[string]interface{}, rec_t int64) {
+	sum.rawRecent[0] = make([]map[string]interface{}, 1, sum.BinSeconds)
+	sum.rawRecent[0][0] = rec
+	sum.binLimitUnix = int64((math.Floor(float64(rec_t)/(float64(sum.BinSeconds)*1000.0)) + 1.0) * float64(sum.BinSeconds))
+}
+
+func (sum *StreamingSummary) rotateRawRecent() {
+	if len(sum.rawRecent) < sum.rawCache {
+		sum.rawRecent = append(sum.rawRecent, nil)
+	}
+	for i := len(sum.rawRecent) - 1; i >= 1; i-- {
+		sum.rawRecent[i] = sum.rawRecent[i-1]
+	}
+	sum.rawRecent[0] = nil
+}
+
+func (sum *StreamingSummary) summaryBins() int {
+	summaryBins := sum.KeepCount / sum.summaryChunkSize
+	if summaryBins == 0 {
+		return 1
+	}
+	return summaryBins
+}
+
+func (sum *StreamingSummary) addSum(rec map[string]interface{}) {
+	rec_tx, ok := rec["_t"]
+	if !ok {
+		// WARNING ERROR ETC, cannot add without time
+		return
+	}
+	rec_t, ok := rec_tx.(int64)
+	if !ok {
+		// WARNING ERROR ETC, cannot add without time
+		return
+	}
+
+	if sum.binnedSummaries == nil {
+		if sum.summaryChunkSize == 0 {
+			sum.summaryChunkSize = 500
+		}
+		summaryBins := sum.summaryBins()
+		sum.binnedSummaries = make([][]map[string]interface{}, 1, summaryBins)
+		sum.startBS0(rec, rec_t)
+		return
+	}
+	if (rec_t / 1000) > sum.binLimitUnix {
+		// next bin!
+		sum.rotateBinnedSummaries()
+		sum.startBS0(rec, rec_t)
+		return
+	}
+	sum.binnedSummaries[0] = append(sum.binnedSummaries[0], rec)
+}
+
+func (sum *StreamingSummary) startBS0(rec map[string]interface{}, rec_t int64) {
+	sum.binnedSummaries[0] = make([]map[string]interface{}, 1, sum.BinSeconds)
+	sum.binnedSummaries[0][0] = rec
+	sum.binLimitUnix = int64((math.Floor(float64(rec_t)/(float64(sum.BinSeconds)*1000.0)) + 1.0) * float64(sum.BinSeconds))
+}
+
+func (sum *StreamingSummary) rotateBinnedSummaries() {
+	summaryBins := sum.summaryBins()
+	if len(sum.binnedSummaries) < summaryBins {
+		sum.binnedSummaries = append(sum.binnedSummaries, nil)
+	}
+	for i := len(sum.binnedSummaries) - 1; i >= 1; i-- {
+		sum.binnedSummaries[i] = sum.binnedSummaries[i-1]
+	}
+	sum.binnedSummaries[0] = nil
 }
 
 // get the newest records, up to limit
 func (sum *StreamingSummary) GetRawRecent(limit int) []map[string]interface{} {
-	return nil
+	out := make([]map[string]interface{}, 0, limit)
+	for _, subset := range sum.rawRecent {
+		for i := len(subset) - 1; i >= 0; i-- {
+			out = append(out, subset[i])
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 // get the newest records, up to limit
