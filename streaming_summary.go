@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+const DefaultKeepCount = 20000
+const DefaultBinSeconds = 60
+const defaultSummaryChunkSize = 500
+const defaultRawCache = 10
+
+func debug(x string, args ...interface{}) {
+	//fmt.Fprintf(os.Stderr, x+"\n", args...)
+}
+
 // Merge VE.Direct records based on time (e.g. 1 minute average of 1 second records), keep the most recent N.
 //
 // Different fields are merged on different rules, some are averaged, some are last-value-wins
@@ -22,9 +31,10 @@ type StreamingSummary struct {
 	// [N][summaryChunkSize]map[string]interface{}
 	binnedSummaries  [][]map[string]interface{}
 	summaryChunkSize int // ~500
+	numSummaryBins   int
 
-	// time.Time.Unix() after which the next bin starts
-	bs0LimitUnix int64
+	// time.Time.UnixMilli() after which the next bin starts
+	bs0LimitUnixMilli int64
 
 	// rawRecent holds a few bins of raw data
 	// [N][BinSeconds]map[string]interface{}
@@ -32,8 +42,8 @@ type StreamingSummary struct {
 	rawRecent [][]map[string]interface{}
 	rawCache  int // ~10
 
-	// time.Time.Unix() after which the next bin starts
-	binLimitUnix int64
+	// time.Time.UnixMilli() after which the next bin starts
+	binLimitUnixMilli int64
 }
 
 func (sum *StreamingSummary) Add(rec map[string]interface{}) {
@@ -50,13 +60,14 @@ func (sum *StreamingSummary) Add(rec map[string]interface{}) {
 
 	if sum.rawRecent == nil {
 		if sum.rawCache == 0 {
-			sum.rawCache = 10
+			sum.rawCache = defaultRawCache
+			debug("rawCache = %d", sum.rawCache)
 		}
 		sum.rawRecent = make([][]map[string]interface{}, 1, sum.rawCache)
 		sum.startRR0(rec, rec_t)
 		return
 	}
-	if (rec_t / 1000) > sum.binLimitUnix {
+	if rec_t > sum.binLimitUnixMilli {
 		// next bin!
 		sum.addSum(summarize(sum.rawRecent[0]))
 		sum.rotateRawRecent()
@@ -67,9 +78,13 @@ func (sum *StreamingSummary) Add(rec map[string]interface{}) {
 }
 
 func (sum *StreamingSummary) startRR0(rec map[string]interface{}, rec_t int64) {
+	if sum.BinSeconds == 0 {
+		sum.BinSeconds = DefaultBinSeconds
+	}
 	sum.rawRecent[0] = make([]map[string]interface{}, 1, sum.BinSeconds)
 	sum.rawRecent[0][0] = rec
-	sum.binLimitUnix = int64((math.Floor(float64(rec_t)/(float64(sum.BinSeconds)*1000.0)) + 1.0) * float64(sum.BinSeconds))
+	sum.binLimitUnixMilli = 1000 * int64((math.Floor(float64(rec_t)/(float64(sum.BinSeconds*1000)))+1.0)*float64(sum.BinSeconds))
+	debug("startRR0 rec_t %d binLimit %d", rec_t, sum.binLimitUnixMilli)
 }
 
 func (sum *StreamingSummary) rotateRawRecent() {
@@ -83,11 +98,17 @@ func (sum *StreamingSummary) rotateRawRecent() {
 }
 
 func (sum *StreamingSummary) summaryBins() int {
-	summaryBins := sum.KeepCount / sum.summaryChunkSize
-	if summaryBins == 0 {
-		return 1
+	if sum.numSummaryBins == 0 {
+		if sum.KeepCount == 0 {
+			sum.KeepCount = DefaultKeepCount
+		}
+		summaryBins := sum.KeepCount / sum.summaryChunkSize
+		for summaryBins*sum.summaryChunkSize < sum.KeepCount {
+			summaryBins += 1
+		}
+		sum.numSummaryBins = summaryBins
 	}
-	return summaryBins
+	return sum.numSummaryBins
 }
 
 func (sum *StreamingSummary) addSum(rec map[string]interface{}) {
@@ -104,14 +125,14 @@ func (sum *StreamingSummary) addSum(rec map[string]interface{}) {
 
 	if sum.binnedSummaries == nil {
 		if sum.summaryChunkSize == 0 {
-			sum.summaryChunkSize = 500
+			sum.summaryChunkSize = defaultSummaryChunkSize
 		}
 		summaryBins := sum.summaryBins()
 		sum.binnedSummaries = make([][]map[string]interface{}, 1, summaryBins)
 		sum.startBS0(rec, rec_t)
 		return
 	}
-	if (rec_t / 1000) > sum.binLimitUnix {
+	if rec_t > sum.binLimitUnixMilli {
 		// next bin!
 		sum.rotateBinnedSummaries()
 		sum.startBS0(rec, rec_t)
@@ -121,9 +142,12 @@ func (sum *StreamingSummary) addSum(rec map[string]interface{}) {
 }
 
 func (sum *StreamingSummary) startBS0(rec map[string]interface{}, rec_t int64) {
+	if sum.BinSeconds == 0 {
+		sum.BinSeconds = DefaultBinSeconds
+	}
 	sum.binnedSummaries[0] = make([]map[string]interface{}, 1, sum.BinSeconds)
 	sum.binnedSummaries[0][0] = rec
-	sum.binLimitUnix = int64((math.Floor(float64(rec_t)/(float64(sum.BinSeconds)*1000.0)) + 1.0) * float64(sum.BinSeconds))
+	sum.binLimitUnixMilli = 1000 * int64((math.Floor(float64(rec_t)/(float64(sum.BinSeconds*1000)))+1.0)*float64(sum.BinSeconds))
 }
 
 func (sum *StreamingSummary) rotateBinnedSummaries() {
@@ -137,12 +161,18 @@ func (sum *StreamingSummary) rotateBinnedSummaries() {
 	sum.binnedSummaries[0] = nil
 }
 
-// get the newest records, up to limit
-func (sum *StreamingSummary) GetRawRecent(limit int) []map[string]interface{} {
+// get the newest records, up to limit.
+//
+// after is time.Time.UnixMilli()
+func (sum *StreamingSummary) GetRawRecent(after int64, limit int) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, limit)
 	for _, subset := range sum.rawRecent {
 		for i := len(subset) - 1; i >= 0; i-- {
-			out = append(out, subset[i])
+			rec := subset[i]
+			if rec["_t"].(int64) <= after {
+				return out
+			}
+			out = append(out, rec)
 			if len(out) >= limit {
 				return out
 			}
@@ -152,8 +182,21 @@ func (sum *StreamingSummary) GetRawRecent(limit int) []map[string]interface{} {
 }
 
 // get the newest records, up to limit
-func (sum *StreamingSummary) GetSummedRecent(limit int) []map[string]interface{} {
-	return nil
+func (sum *StreamingSummary) GetSummedRecent(after int64, limit int) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, limit)
+	for _, subset := range sum.binnedSummaries {
+		for i := len(subset) - 1; i >= 0; i-- {
+			rec := subset[i]
+			if rec["_t"].(int64) <= after {
+				return out
+			}
+			out = append(out, rec)
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 // mean - average of data points

@@ -39,3 +39,38 @@ func TestSummarize(t *testing.T) {
 		t.Errorf("wat[CS] got %#v", wat["CS"])
 	}
 }
+
+func TestStreamingSummary(t *testing.T) {
+	sum := StreamingSummary{}
+	for i := 0; i < 66; i++ {
+		rec := make(map[string]interface{}, 1)
+		rec["_t"] = (int64(i) * 1000) + 1
+		rec["V"] = int64(10000 + (20000 * (i % 2)))
+		sum.Add(rec)
+		t.Logf("Add %#v", rec)
+	}
+	raw := sum.GetRawRecent(-1, 99)
+	if 66 != len(raw) {
+		t.Errorf("GetRawRecent len=%d", len(raw))
+	}
+	sums := sum.GetSummedRecent(-1, 99)
+	eq(t, 1, len(sums))
+	v := sums[0]["V"].(float64)
+	if (v < 19999) || (v > 20001) {
+		t.Errorf("bad V Average %f", v)
+	}
+	t.Logf("sums[0] %#v", sums[0])
+	raw = sum.GetRawRecent(sums[0]["_t"].(int64), 99)
+	if 6 != len(raw) {
+		t.Errorf("GetRawRecent 6 len=%d", len(raw))
+	}
+
+	// TODO: check at the capacity limit that stuff is getting dropped correctly
+}
+
+func eq(t *testing.T, expected, actual interface{}) {
+	if expected == actual {
+		return
+	}
+	t.Errorf("wanted %#v, got %#v", expected, actual)
+}
