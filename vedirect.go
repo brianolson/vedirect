@@ -7,6 +7,7 @@ package vedirect
 import (
 	"bufio"
 	"context"
+	ehex "encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -35,10 +36,23 @@ const (
 	delimiter = '\t'
 )
 
-type VedirectOption int
+type Command byte
 
 const (
-	AddTime VedirectOption = 1
+	// Enter bootloader = 0x00
+	Ping       Command = 1
+	AppVersion Command = 3
+	ProductId  Command = 4
+	Restart    Command = 6
+	Get        Command = 7
+	Set        Command = 8
+	Async      Command = 0xA
+)
+
+type Option int
+
+const (
+	AddTime Option = 1
 )
 
 type Vedirect struct {
@@ -47,6 +61,9 @@ type Vedirect struct {
 
 	fin io.Reader
 
+	fout io.Writer
+
+	// debug output
 	dout io.Writer
 
 	ctx context.Context
@@ -61,6 +78,8 @@ type Vedirect struct {
 
 	value []byte
 
+	hexMessage []byte
+
 	state vedState
 
 	wg *sync.WaitGroup
@@ -71,7 +90,7 @@ type Vedirect struct {
 // out chan receives data.
 // wg may be nil.
 // debugOut may be nil.
-func Open(path string, out chan<- map[string]string, wg *sync.WaitGroup, ctx context.Context, debugOut io.Writer, options ...VedirectOption) (v *Vedirect, err error) {
+func Open(path string, out chan<- map[string]string, wg *sync.WaitGroup, ctx context.Context, debugOut io.Writer, options ...Option) (v *Vedirect, err error) {
 	v = new(Vedirect)
 	v.dout = debugOut
 	st, err := os.Stat(path)
@@ -131,11 +150,18 @@ const charDevice = fs.ModeDevice | fs.ModeCharDevice
 
 // handle achieves parsing VE.Direct status messages
 // lines are mostly text except Checksum byte:
-// "{key}\t{value}\r\n"
-// "Checksum\t{cs byte}\r\n"
+// "\r\n{key}\t{value}"
+// "\r\nChecksum\t{cs byte}"
+// {cs byte} + {all bytes through "\r\n" after previous csbyte} == 0x00
+//
+// HEX protocol line:
+// :{command nybble}{[xx] hex bytes...}{cs byte}\n
+// 0x0{command nybble} + bytes + cs byte == 0x55
 func (v *Vedirect) handle(b uint8) {
 	if b == hexmarker && v.state != inChecksum {
 		v.state = hex
+		v.hexMessage = make([]byte, 1, 20)
+		v.hexMessage[0] = '0' // prefix for command nybble
 	}
 
 	v.bytesSum += uint(b)
@@ -181,11 +207,57 @@ func (v *Vedirect) handle(b uint8) {
 	case hex:
 		v.bytesSum = 0
 		if b == '\n' {
+			v.finishHexMessage()
 			v.state = waitHeader
+		} else {
+			// accumulate nybbles, parse at end
+			v.hexMessage = append(v.hexMessage, b)
 		}
 	default:
 		panic("bad state")
 	}
+}
+
+func (v *Vedirect) finishHexMessage() {
+	blen := len(v.hexMessage) / 2
+	hbytes := make([]byte, blen)
+	count, err := ehex.Decode(hbytes, v.hexMessage)
+	if err != nil {
+		log.Printf("bad HEX message, %v", err)
+		return
+	}
+	var hexSum uint
+	for _, c := range hbytes[:count] {
+		hexSum += uint(c)
+	}
+	if hexSum&0x0ff != 0x055 {
+		log.Printf("bad HEX checksum, 0x%02x != 0x55", hexSum&0x0ff)
+		return
+	}
+	data := make(map[string]string)
+	if v.AddTime {
+		data["_t"] = strconv.FormatInt(time.Now().UnixMilli(), 10)
+	}
+	data["_x"] = string(v.hexMessage)
+	v.out <- data
+}
+
+// SendHexCommand sends a HEX protocol command to a VE.Direct device.
+//
+// If successful, response will come in normal message stream parsed into data["_x"] = "aabbccddeeff"
+//
+// Parsed HEX messages have their command nybble filled out to a whole byte so that hex.DecodeString(data["_x"]) should work.
+//
+// Actual message fields vary by length and content and are left to application code, but you might want "encoding/binary" LittleEndian.Uint16([]byte) and .PutUint16([]byte, uint16)
+func (v *Vedirect) SendHexCommand(cmd Command, msg []byte) error {
+	out := make([]byte, 2+(len(msg)*2))
+	wat := []byte{byte(cmd)}
+	ehex.Encode(out, wat)
+	ehex.Encode(out[2:], msg)
+	upper := strings.ToUpper(string(out[1:]))
+	command := fmt.Sprintf(":%s\n", upper)
+	_, err := v.fout.Write([]byte(command))
+	return err
 }
 
 func (v *Vedirect) readThread() {
