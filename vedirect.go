@@ -162,6 +162,7 @@ func (v *Vedirect) handle(b uint8) {
 		v.state = hex
 		v.hexMessage = make([]byte, 1, 20)
 		v.hexMessage[0] = '0' // prefix for command nybble
+		return
 	}
 
 	v.bytesSum += uint(b)
@@ -224,6 +225,7 @@ func (v *Vedirect) finishHexMessage() {
 	count, err := ehex.Decode(hbytes, v.hexMessage)
 	if err != nil {
 		log.Printf("bad HEX message, %v", err)
+		log.Printf("hexbyte: %s", ehex.EncodeToString(v.hexMessage))
 		return
 	}
 	var hexSum uint
