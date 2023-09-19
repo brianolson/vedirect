@@ -44,7 +44,9 @@ func TestStreamingSummary(t *testing.T) {
 	sum := StreamingSummary{}
 	for i := 0; i < 66; i++ {
 		rec := make(map[string]interface{}, 1)
+		// advance each by one second
 		rec["_t"] = (int64(i) * 1000) + 1
+		// [10000, 30000, repeat...] average 20000 (20V)
 		rec["V"] = int64(10000 + (20000 * (i % 2)))
 		sum.Add(rec)
 		t.Logf("Add %#v", rec)
@@ -60,6 +62,8 @@ func TestStreamingSummary(t *testing.T) {
 		t.Errorf("bad V Average %f", v)
 	}
 	t.Logf("sums[0] %#v", sums[0])
+
+	// after summarizing the first 60 seconds, we should have 6 more raw seconds to read
 	raw = sum.GetRawRecent(sums[0]["_t"].(int64), 99)
 	if 6 != len(raw) {
 		t.Errorf("GetRawRecent 6 len=%d", len(raw))

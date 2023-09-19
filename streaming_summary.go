@@ -2,7 +2,10 @@ package vedirect
 
 import (
 	"bufio"
+	"fmt"
+	"io"
 	"math"
+	"os"
 	"strings"
 )
 
@@ -11,13 +14,18 @@ const DefaultBinSeconds = 60
 const defaultSummaryChunkSize = 500
 const defaultRawCache = 10
 
+var DebugEnabled bool = false
+var DebugWriter io.Writer = os.Stderr
+
 func debug(x string, args ...interface{}) {
-	//fmt.Fprintf(os.Stderr, x+"\n", args...)
+	if DebugEnabled {
+		fmt.Fprintf(DebugWriter, x+"\n", args...)
+	}
 }
 
 // Merge VE.Direct records based on time (e.g. 1 minute average of 1 second records), keep the most recent N.
 //
-// Different fields are merged on different rules, some are averaged, some are last-value-wins
+// # Different fields are merged on different rules, some are averaged, some are last-value-wins
 //
 // BinSeconds * KeepCount is the amonut of total time covered. {BinSeconds:60, KeepCount: 24*60} will merge data into 1 minute bins and keep the most recent 24 hours of data.
 type StreamingSummary struct {
@@ -37,10 +45,10 @@ type StreamingSummary struct {
 	bs0LimitUnixMilli int64
 
 	// rawRecent holds a few bins of raw data
-	// [N][BinSeconds]map[string]interface{}
+	// [rawCache][BinSeconds]map[string]interface{}
 	// rawRecent[0] is currently-building recent records
 	rawRecent [][]map[string]interface{}
-	rawCache  int // ~10
+	rawCache  int // default 10
 
 	// time.Time.UnixMilli() after which the next bin starts
 	binLimitUnixMilli int64
@@ -49,11 +57,13 @@ type StreamingSummary struct {
 func (sum *StreamingSummary) Add(rec map[string]interface{}) {
 	rec_tx, ok := rec["_t"]
 	if !ok {
+		debug("cannot add record without _t time")
 		// WARNING ERROR ETC, cannot add without time
 		return
 	}
 	rec_t, ok := rec_tx.(int64)
 	if !ok {
+		debug("record _t is not int64, got %T", rec_tx)
 		// WARNING ERROR ETC, cannot add without time
 		return
 	}
@@ -88,12 +98,15 @@ func (sum *StreamingSummary) startRR0(rec map[string]interface{}, rec_t int64) {
 }
 
 func (sum *StreamingSummary) rotateRawRecent() {
+	// if less than rawCache blocks of raw, grow
 	if len(sum.rawRecent) < sum.rawCache {
 		sum.rawRecent = append(sum.rawRecent, nil)
 	}
+	// move everything down (drops last if too many)
 	for i := len(sum.rawRecent) - 1; i >= 1; i-- {
 		sum.rawRecent[i] = sum.rawRecent[i-1]
 	}
+	// clear next slot, see startRR0
 	sum.rawRecent[0] = nil
 }
 
@@ -182,6 +195,7 @@ func (sum *StreamingSummary) GetRawRecent(after int64, limit int) []map[string]i
 }
 
 // get the newest records, up to limit
+// the _t time for a summary is the _last_ time of any sample within the summarized range, thus you can query GetRawRecent after= from a summed _t value
 func (sum *StreamingSummary) GetSummedRecent(after int64, limit int) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, limit)
 	for _, subset := range sum.binnedSummaries {

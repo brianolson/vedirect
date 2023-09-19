@@ -336,6 +336,7 @@ HSDS Day sequence number
 AC_OUT_V 0.01V
 AC_OUT_I 0.1A
 AC_OUT_S VA
+_t ms
 `
 
 const otherFieldsBlob = `LOAD
@@ -363,7 +364,7 @@ var IntFields map[string]string
 
 // OtherFields is a set of known VE.Direct fields that are not int.
 //
-//  isKnownOtherField := vedirect.OtherFields["BLAH"]
+//	isKnownOtherField := vedirect.OtherFields["BLAH"]
 var OtherFields map[string]bool
 
 func init() {
