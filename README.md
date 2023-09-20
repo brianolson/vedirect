@@ -12,6 +12,10 @@ Read serial from Victron Energy devices. Parse and make available as Go objects 
 
 See example apps cmd/vedump and cmd/vesend
 
+A series of records is often compressed to be only the fields that change. For example, in the raw serial protocol the Product ID and Serial Number will be in every record printed every second, but when I return a series of records those are in the first record and not the next 999. If the voltage changes from one record to the next but the amperage doesn't, the amperage won't be in the next record. The full record for any time can be reconstructed by starting with the first record and applying each next record as an update.
+
+A timestamp record "_t" is added to each record at the unix milliseconds* when the record was fully received and parsed from the serial port. ( * time since 1970-01-01 00:00:00 UTC )
+
 ## vesend
 
 ```sh
@@ -19,6 +23,6 @@ vesend -dev /dev/serial/by-id/usb-VictronEnergy_BV_VE_Direct_cable_*-port0  -pos
 ```
 
 ```sh
-curl http://127.0.0.1:8080/records.json
+curl http://127.0.0.1:8080/ve.json
 ```
 
