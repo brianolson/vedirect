@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,10 +15,8 @@ import (
 	"time"
 
 	"github.com/brianolson/vedirect"
+	"github.com/brianolson/vedirect/veplot"
 )
-
-//go:embed static
-var sfs embed.FS
 
 type Message struct {
 	// Data is differential VE.Direct records
@@ -157,7 +154,7 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 		wg.Add(1)
 		go serv.dataReceiver(servChan, wg)
 		mux := http.NewServeMux()
-		sh := StaticHandler{stripPrefix: "/s/", newPrefix: "/static/", fsHandler: http.FileServer(http.FS(sfs))}
+		sh := StaticHandler{stripPrefix: "/s/", newPrefix: "/static/", fsHandler: http.FileServer(http.FS(veplot.VePlotStaticFS))}
 		mux.Handle("/s/", &sh)
 		mux.Handle("/", &serv)
 		httpServer := http.Server{

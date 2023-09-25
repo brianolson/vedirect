@@ -13,3 +13,4 @@ require (
 )
 
 replace github.com/brianolson/vedirect => ../../../vedirect
+replace github.com/brianolson/vedirect/veplot => ../../../vedirect/veplot

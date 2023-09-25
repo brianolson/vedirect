@@ -3,7 +3,6 @@ package main
 import (
 	"compress/gzip"
 	"context"
-	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,11 +20,9 @@ import (
 	"time"
 
 	"github.com/brianolson/vedirect"
+	"github.com/brianolson/vedirect/veplot"
 	"github.com/fsnotify/fsnotify"
 )
-
-//go:embed static
-var sfs embed.FS
 
 type Message struct {
 	// Data is differential VE.Direct records
@@ -79,7 +76,7 @@ func main() {
 	go serv.readyThread(ctx, readyPaths, &wg)
 
 	mux := http.NewServeMux()
-	sh := StaticHandler{stripPrefix: "/s/", newPrefix: "/static/", fsHandler: http.FileServer(http.FS(sfs))}
+	sh := StaticHandler{stripPrefix: "/s/", newPrefix: "/static/", fsHandler: http.FileServer(http.FS(veplot.VePlotStaticFS))}
 	mux.Handle("/s/", &sh)
 	mux.Handle("/", &serv)
 	httpServer := http.Server{
