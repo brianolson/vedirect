@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -40,9 +41,6 @@ type StreamingSummary struct {
 	binnedSummaries  [][]map[string]interface{}
 	summaryChunkSize int // ~500
 	numSummaryBins   int
-
-	// time.Time.UnixMilli() after which the next bin starts
-	bs0LimitUnixMilli int64
 
 	// rawRecent holds a few bins of raw data
 	// [rawCache][BinSeconds]map[string]interface{}
@@ -119,7 +117,7 @@ func (sum *StreamingSummary) summaryBins() int {
 		for summaryBins*sum.summaryChunkSize < sum.KeepCount {
 			summaryBins += 1
 		}
-		sum.numSummaryBins = summaryBins
+		sum.numSummaryBins = summaryBins + 1
 	}
 	return sum.numSummaryBins
 }
@@ -145,7 +143,7 @@ func (sum *StreamingSummary) addSum(rec map[string]interface{}) {
 		sum.startBS0(rec, rec_t)
 		return
 	}
-	if rec_t > sum.binLimitUnixMilli {
+	if len(sum.binnedSummaries[0]) >= sum.summaryChunkSize {
 		// next bin!
 		sum.rotateBinnedSummaries()
 		sum.startBS0(rec, rec_t)
@@ -155,12 +153,8 @@ func (sum *StreamingSummary) addSum(rec map[string]interface{}) {
 }
 
 func (sum *StreamingSummary) startBS0(rec map[string]interface{}, rec_t int64) {
-	if sum.BinSeconds == 0 {
-		sum.BinSeconds = DefaultBinSeconds
-	}
-	sum.binnedSummaries[0] = make([]map[string]interface{}, 1, sum.BinSeconds)
+	sum.binnedSummaries[0] = make([]map[string]interface{}, 1, sum.summaryChunkSize)
 	sum.binnedSummaries[0][0] = rec
-	sum.binLimitUnixMilli = 1000 * int64((math.Floor(float64(rec_t)/(float64(sum.BinSeconds*1000)))+1.0)*float64(sum.BinSeconds))
 }
 
 func (sum *StreamingSummary) rotateBinnedSummaries() {
@@ -194,6 +188,21 @@ func (sum *StreamingSummary) GetRawRecent(after int64, limit int) []map[string]i
 	return out
 }
 
+func (sum *StreamingSummary) allRawData() []map[string]interface{} {
+	count := 0
+	for _, subset := range sum.rawRecent {
+		count += len(subset)
+	}
+	out := make([]map[string]interface{}, 0, count)
+	for _, subset := range sum.rawRecent {
+		for i := len(subset) - 1; i >= 0; i-- {
+			rec := subset[i]
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // get the newest records, up to limit
 // the _t time for a summary is the _last_ time of any sample within the summarized range, thus you can query GetRawRecent after= from a summed _t value
 func (sum *StreamingSummary) GetSummedRecent(after int64, limit int) []map[string]interface{} {
@@ -211,6 +220,107 @@ func (sum *StreamingSummary) GetSummedRecent(after int64, limit int) []map[strin
 		}
 	}
 	return out
+}
+
+func (sum *StreamingSummary) allSumData() []map[string]interface{} {
+	count := 0
+	for _, subset := range sum.binnedSummaries {
+		count += len(subset)
+	}
+	out := make([]map[string]interface{}, 0, count)
+	for _, subset := range sum.binnedSummaries {
+		for i := len(subset) - 1; i >= 0; i-- {
+			rec := subset[i]
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+type RecTimeSort []map[string]interface{}
+
+// Len is part of sort.Interface
+func (rts *RecTimeSort) Len() int {
+	return len(*rts)
+}
+func (rts *RecTimeSort) Less(i, j int) bool {
+	a := (*rts)[i]
+	b := (*rts)[j]
+	return a["_t"].(int64) < b["_t"].(int64)
+}
+func (rts *RecTimeSort) Swap(i, j int) {
+	t := (*rts)[i]
+	(*rts)[i] = (*rts)[j]
+	(*rts)[j] = t
+}
+
+// GetData returns a merged set of data with merged samples before some time and raw samples after.
+func (sum *StreamingSummary) GetData(raw_after int64) []map[string]interface{} {
+	// TODO: bring back a split version of this to have shorter mutex shadow as used in vesend.go, do the following to copying data gets, release the lock, then do the merge
+	sdat := sum.allSumData()
+	rdat := sum.allRawData()
+	if len(sdat) == 0 {
+		debug("merge no summary")
+		return rdat
+	}
+	if len(rdat) == 0 {
+		debug("merge no raw")
+		return sdat
+	}
+	var sumNewest int64 = 0
+	for _, rec := range sdat {
+		t := rec["_t"].(int64)
+		if t > sumNewest && t < raw_after {
+			sumNewest = t
+		}
+	}
+	if sumNewest == 0 {
+		debug("merge all raw")
+		return rdat
+	}
+	rawOldest := rdat[0]["_t"].(int64)
+	for _, rec := range rdat {
+		t := rec["_t"].(int64)
+		if t < rawOldest {
+			rawOldest = t
+		}
+	}
+	debug("merge sumNewest %d rawOldest %d", sumNewest, rawOldest)
+	var alldata []map[string]interface{}
+	if sumNewest > rawOldest {
+		// find the oldest summary that is newer than rawOldest, then drop raw older than that and summaries newer than that, then join, perfect no overlap
+		sumKey := sumNewest
+		//sumKeyI := sumKeyI
+		for _, rec := range sdat {
+			t := rec["_t"].(int64)
+			if t < sumKey && t > rawOldest {
+				sumKey = t
+				//sumKeyI = i
+			}
+		}
+		alldata = make([]map[string]interface{}, 0, len(sdat)+len(rdat))
+		for _, rec := range sdat {
+			t := rec["_t"].(int64)
+			if t <= sumKey {
+				alldata = append(alldata, rec)
+			}
+		}
+		for _, rec := range rdat {
+			t := rec["_t"].(int64)
+			if t > sumKey {
+				alldata = append(alldata, rec)
+			}
+		}
+	} else {
+		// there is a gap? join and hope for the best
+		alldata = make([]map[string]interface{}, len(sdat)+len(rdat))
+		copy(alldata, sdat)
+		copy(alldata[len(sdat):], rdat)
+	}
+	debug("GetData %d sums, %d raw => %d merged", len(sdat), len(rdat), len(alldata))
+	var sad RecTimeSort = alldata
+	sort.Sort(&sad)
+	return alldata
 }
 
 // mean - average of data points

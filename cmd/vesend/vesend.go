@@ -4,85 +4,22 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
-	"reflect"
-	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/brianolson/vedirect"
 )
 
-func recDiff(a, b map[string]string) map[string]string {
-	d := make(map[string]string, len(b))
-	for ak, av := range a {
-		bv, ok := b[ak]
-		if ok {
-			if av != bv {
-				// change
-				d[ak] = bv
-			} // else no change
-		} else {
-			// not present in b
-			//d[ak] = nil
-		}
-	}
-	for bk, bv := range b {
-		_, ok := a[bk]
-		if !ok {
-			// new value not in a
-			d[bk] = bv
-		}
-	}
-	return d
-}
-func recDiffI(a, b map[string]interface{}) map[string]interface{} {
-	d := make(map[string]interface{}, len(b))
-	for ak, av := range a {
-		bv, ok := b[ak]
-		if ok {
-			if !reflect.DeepEqual(av, bv) {
-				// change
-				d[ak] = bv
-			} // else no change
-		} else {
-			// not present in b
-			//d[ak] = nil
-		}
-	}
-	for bk, bv := range b {
-		_, ok := a[bk]
-		if !ok {
-			// new value not in a
-			d[bk] = bv
-		}
-	}
-	return d
-}
-
-func makeDeltas(batch []map[string]string, deltas []map[string]interface{}, sendPeriod int) []map[string]interface{} {
-	pos := len(deltas)
-	if deltas == nil {
-		deltas = make([]map[string]interface{}, 0, len(batch))
-	}
-	for ; pos < len(batch); pos++ {
-		var nrec map[string]string
-		if (pos % sendPeriod) == 0 {
-			nrec = make(map[string]string, len(batch[pos]))
-			for k, v := range batch[pos] {
-				nrec[k] = v
-			}
-		} else {
-			nrec = recDiff(batch[pos-1], batch[pos])
-		}
-		deltas = append(deltas, vedirect.ParseRecord(nrec))
-	}
-	return deltas
-}
+//go:embed static
+var sfs embed.FS
 
 type Message struct {
 	// Data is differential VE.Direct records
@@ -117,8 +54,8 @@ func main() {
 	flag.BoolVar(&sendJsonGzip, "z", true, "sent application/gzip compress of json")
 	flag.StringVar(&serveAddr, "serve", "", "host:port to serve http API from")
 	flag.Parse()
-	if postUrl == "" {
-		fmt.Fprintf(os.Stderr, "-post URL is required\n")
+	if postUrl == "" && serveAddr == "" {
+		fmt.Fprintf(os.Stderr, "one of '-post URL' or '-serve :port' is required\n")
 		os.Exit(1)
 		return
 	}
@@ -161,114 +98,40 @@ func (sums *Server) dataReceiver(recChan <-chan map[string]string, wg *sync.Wait
 	}
 }
 
-// TODO: make this a method of StreamingSummary
-func mergeSummedRaw(sdat, rdat []map[string]interface{}, raw_after int64) []map[string]interface{} {
-	if len(sdat) == 0 {
-		debug("merge no summary")
-		return rdat
-	}
-	if len(rdat) == 0 {
-		debug("merge no raw")
-		return sdat
-	}
-	var sumNewest int64 = 0
-	for _, rec := range sdat {
-		t := rec["_t"].(int64)
-		if t > sumNewest && t < raw_after {
-			sumNewest = t
-		}
-	}
-	if sumNewest == 0 {
-		debug("merge all raw")
-		return rdat
-	}
-	rawOldest := rdat[0]["_t"].(int64)
-	for _, rec := range rdat {
-		t := rec["_t"].(int64)
-		if t < rawOldest {
-			rawOldest = t
-		}
-	}
-	debug("merge sumNewest %d rawOldest %d", sumNewest, rawOldest)
-	var alldata []map[string]interface{}
-	if sumNewest > rawOldest {
-		// find the oldest summary that is newer than rawOldest, then drop raw older than that and summaries newer than that, then join, perfect no overlap
-		sumKey := sumNewest
-		//sumKeyI := sumKeyI
-		for _, rec := range sdat {
-			t := rec["_t"].(int64)
-			if t < sumKey && t > rawOldest {
-				sumKey = t
-				//sumKeyI = i
-			}
-		}
-		alldata = make([]map[string]interface{}, 0, len(sdat)+len(rdat))
-		for _, rec := range sdat {
-			t := rec["_t"].(int64)
-			if t <= sumKey {
-				alldata = append(alldata, rec)
-			}
-		}
-		for _, rec := range rdat {
-			t := rec["_t"].(int64)
-			if t > sumKey {
-				alldata = append(alldata, rec)
-			}
-		}
-	} else {
-		// there is a gap? join and hope for the best
-		alldata = make([]map[string]interface{}, len(sdat)+len(rdat))
-		copy(alldata, sdat)
-		copy(alldata[len(sdat):], rdat)
-	}
-	// TODO: sort data on _t ascending
-	return alldata
-}
-
 type ReturnJSON struct {
 	Data []map[string]interface{} `json:"d"`
 }
 
-type RecTimeSort []map[string]interface{}
-
-// Len is part of sort.Interface
-func (rts *RecTimeSort) Len() int {
-	return len(*rts)
-}
-func (rts *RecTimeSort) Less(i, j int) bool {
-	a := (*rts)[i]
-	b := (*rts)[j]
-	return a["_t"].(int64) < b["_t"].(int64)
-}
-func (rts *RecTimeSort) Swap(i, j int) {
-	t := (*rts)[i]
-	(*rts)[i] = (*rts)[j]
-	(*rts)[j] = t
-}
-
 func (sums *Server) ServeHTTP(out http.ResponseWriter, req *http.Request) {
 	sums.l.RLock()
-	sdat := sums.sum.GetSummedRecent(time.Now().Add(-2*time.Hour).UnixMilli(), 9999)
 	raw_after := time.Now().Add(-10 * time.Minute).UnixMilli()
-	rdat := sums.sum.GetRawRecent(raw_after, 9999)
+	alldata := sums.sum.GetData(raw_after)
 	sums.l.RUnlock()
-	alldata := mergeSummedRaw(sdat, rdat, raw_after)
-	debug("GET %d sums, %d raw => %d merged", len(sdat), len(rdat), len(alldata))
-	var sad RecTimeSort = alldata
-	sort.Sort(&sad)
-	var alldeltas []map[string]interface{} = nil
-	if len(alldata) > 0 {
-		alldeltas = make([]map[string]interface{}, 1, len(alldata))
-		alldeltas[0] = alldata[0]
-		for i := 1; i < len(alldata); i++ {
-			alldeltas = append(alldeltas, recDiffI(alldata[i-1], alldata[i]))
-		}
-	}
+	alldeltas := vedirect.ParsedRecordDeltas(alldata)
 	rdata := ReturnJSON{Data: alldeltas}
 	out.Header().Set("Content-Type", "application/json")
 	out.WriteHeader(200)
 	enc := json.NewEncoder(out)
 	enc.Encode(rdata)
+}
+
+type StaticHandler struct {
+	stripPrefix string
+	newPrefix   string
+	fsHandler   http.Handler
+}
+
+func (sh *StaticHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	if strings.HasPrefix(req.URL.Path, sh.stripPrefix) && ((req.URL.RawPath == "") || strings.HasPrefix(req.URL.RawPath, sh.stripPrefix)) {
+		req.URL.Path = strings.Replace(req.URL.Path, sh.stripPrefix, sh.newPrefix, 1)
+		if req.URL.RawPath != "" {
+			req.URL.RawPath = strings.Replace(req.URL.RawPath, sh.stripPrefix, sh.newPrefix, 1)
+		}
+		sh.fsHandler.ServeHTTP(rw, req)
+	} else {
+		log.Printf("Path=%#v RawPath=%#v, prefix=%#v", req.URL.Path, req.URL.RawPath, sh.stripPrefix)
+		http.Error(rw, "nope", http.StatusNotFound)
+	}
 }
 
 // receive data from Vedirect parser, sometimes poke the sendThread.
@@ -279,19 +142,28 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 	reqStart := make(chan sendRequest, 1)
 	reqReturn := make(chan sendRequest, 1)
 	wg.Add(1)
-	go sendThread(postUrl, reqStart, reqReturn, wg)
+	doPost := false
+	if postUrl != "" {
+		doPost = true
+		go sendThread(postUrl, reqStart, reqReturn, wg)
+	}
 	defer close(reqStart)
 
-	// TODO: if serveAddr != "", start server around a StreamingSummary and post records there
-	doServe := serveAddr != ""
 	var serv Server
 	servChan := make(chan map[string]string, 10)
-	if doServe {
+	doServe := false
+	if serveAddr != "" {
+		doServe = true
 		wg.Add(1)
 		go serv.dataReceiver(servChan, wg)
-		httpServer := http.Server{}
-		httpServer.Addr = serveAddr
-		httpServer.Handler = &serv
+		mux := http.NewServeMux()
+		sh := StaticHandler{stripPrefix: "/s/", newPrefix: "/static/", fsHandler: http.FileServer(http.FS(sfs))}
+		mux.Handle("/s/", &sh)
+		mux.Handle("/", &serv)
+		httpServer := http.Server{
+			Addr:    serveAddr,
+			Handler: mux,
+		}
 		go httpServer.ListenAndServe()
 	}
 
@@ -310,15 +182,17 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 					// drop, sad, don't let broken server stop us
 				}
 			}
-			now := time.Now()
-			batch = append(batch, rec)
-			if len(batch) >= sendPeriod && !sendActive {
-				debug("try send %d recs", len(batch))
-				msg := Message{
-					Data: makeDeltas(batch, nil, sendPeriod),
+			if doPost {
+				now := time.Now()
+				batch = append(batch, rec)
+				if len(batch) >= sendPeriod && !sendActive {
+					debug("try send %d recs", len(batch))
+					msg := Message{
+						Data: vedirect.StringRecordDeltas(batch, nil, sendPeriod),
+					}
+					reqStart <- sendRequest{msg: &msg, start: now}
+					sendActive = true
 				}
-				reqStart <- sendRequest{msg: &msg, start: now}
-				sendActive = true
 			}
 		case req, ok := <-reqReturn:
 			if !ok {
@@ -335,7 +209,7 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 			} else {
 				// grow the batch more, retry
 				debug("send err %v", req.err)
-				req.msg.Data = makeDeltas(batch, req.msg.Data, sendPeriod)
+				req.msg.Data = vedirect.StringRecordDeltas(batch, req.msg.Data, sendPeriod)
 				debug("retry send %d recs", len(req.msg.Data))
 				req.err = nil
 				req.start = time.Now()

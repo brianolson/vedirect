@@ -49,7 +49,7 @@ func TestStreamingSummary(t *testing.T) {
 		// [10000, 30000, repeat...] average 20000 (20V)
 		rec["V"] = int64(10000 + (20000 * (i % 2)))
 		sum.Add(rec)
-		t.Logf("Add %#v", rec)
+		// t.Logf("Add %#v", rec)
 	}
 	raw := sum.GetRawRecent(-1, 99)
 	if 66 != len(raw) {
@@ -61,7 +61,7 @@ func TestStreamingSummary(t *testing.T) {
 	if (v < 19999) || (v > 20001) {
 		t.Errorf("bad V Average %f", v)
 	}
-	t.Logf("sums[0] %#v", sums[0])
+	// t.Logf("sums[0] %#v", sums[0])
 
 	// after summarizing the first 60 seconds, we should have 6 more raw seconds to read
 	raw = sum.GetRawRecent(sums[0]["_t"].(int64), 99)
@@ -70,6 +70,49 @@ func TestStreamingSummary(t *testing.T) {
 	}
 
 	// TODO: check at the capacity limit that stuff is getting dropped correctly
+}
+
+func imin(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func TestStreamingSummaryLong(t *testing.T) {
+	sum := StreamingSummary{}
+	sum.KeepCount = 10000
+	sum.BinSeconds = 60
+
+	sum.GetData(0)
+
+	var lastTime int64 = -1
+	for i := 0; i < (60*10000)+66; i++ {
+		rec := make(map[string]interface{}, 1)
+		// advance each by one second
+		rt := (int64(i) * 1000) + 1
+		rec["_t"] = rt
+		lastTime = rt
+		// [10000, 30000, repeat...] average 20000 (20V)
+		rec["V"] = int64(10000 + (20000 * (i % 2)))
+		sum.Add(rec)
+
+		if (i < 500 && i%50 == 0) || (i%19000 == 0) {
+			// t.Logf("[%d] GetData", i)
+			alldata := sum.GetData(lastTime - (120 * 1000))
+			if len(alldata) < ((i / 60) - 2 + imin(120, i)) {
+				t.Errorf("wanted %#v, got %#v", (i/60)-2+120, len(alldata))
+			}
+		}
+	}
+	// t.Logf("sum.summaryChunkSize %v", sum.summaryChunkSize)
+	// for bi, bs := range sum.binnedSummaries {
+	// 	t.Logf("sum.binnedSummaries[%d] = [%d]{...}", bi, len(bs))
+	// }
+	alldata := sum.GetData(lastTime - (120 * 1000))
+	if len(alldata) < (10000 - 2 + 120) {
+		t.Errorf("wanted %#v, got %#v", 10000-2+120, len(alldata))
+	}
 }
 
 func eq(t *testing.T, expected, actual interface{}) {

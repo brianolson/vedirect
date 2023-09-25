@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -427,6 +428,38 @@ func ParseRecord(rec map[string]string) map[string]interface{} {
 	return nrec
 }
 
+func ParseRecordField(k string, v any) any {
+	switch vt := v.(type) {
+	case string:
+		return ParseRecordFieldString(k, vt)
+	default:
+		return v
+	}
+}
+func ParseRecordFieldString(k, v string) any {
+	_, isInt := IntFields[k]
+	if isInt {
+		iv, err := strconv.ParseInt(v, 10, 64)
+		if err == nil {
+			return iv
+		} else {
+			debug := ParseRecordDebug
+			if debug != nil {
+				fmt.Fprintf(debug, "bad int [%s]=%#v (%v)", k, v, err)
+			}
+		}
+	} else {
+		knownOther := OtherFields[k]
+		if !knownOther {
+			debug := ParseRecordDebug
+			if debug != nil {
+				fmt.Fprintf(debug, "unknown field [%s]=%#v", k, v)
+			}
+		}
+	}
+	return v
+}
+
 // FloatWholeUnits uses the unit string from IntFields to convert some values into float64 of their whole unit.
 // e.g. (10_000, "mV)" -> (10.0, "V")
 //
@@ -446,4 +479,103 @@ func FloatWholeUnits(v int64, unit string) (float64, string) {
 		return float64(v) / 100.0, unit[4:]
 	}
 	return float64(v), unit
+}
+
+func stringRecDiff(a, b map[string]string) map[string]string {
+	d := make(map[string]string, len(b))
+	for ak, av := range a {
+		bv, ok := b[ak]
+		if ok {
+			if av != bv {
+				// change
+				d[ak] = bv
+			} // else no change
+		} else {
+			// not present in b
+			//d[ak] = nil
+		}
+	}
+	for bk, bv := range b {
+		_, ok := a[bk]
+		if !ok {
+			// new value not in a
+			d[bk] = bv
+		}
+	}
+	return d
+}
+
+// StringRecordDeltas makes a list of deltas.
+// The first record has all its fields, each record after only has fields that have changed.
+// passed in deltas object is appeneded to, or may be nil.
+// Output records have ParseRecord applied
+func StringRecordDeltas(batch []map[string]string, deltas []map[string]interface{}, keyframePeriod int) []map[string]interface{} {
+	pos := len(deltas)
+	if deltas == nil {
+		deltas = make([]map[string]interface{}, 0, len(batch))
+	}
+	for ; pos < len(batch); pos++ {
+		var nrec map[string]string
+		if (pos % keyframePeriod) == 0 {
+			nrec = make(map[string]string, len(batch[pos]))
+			for k, v := range batch[pos] {
+				nrec[k] = v
+			}
+		} else {
+			nrec = stringRecDiff(batch[pos-1], batch[pos])
+		}
+		deltas = append(deltas, ParseRecord(nrec))
+	}
+	return deltas
+}
+
+func parsedRecDiff(a, b map[string]interface{}) map[string]interface{} {
+	d := make(map[string]interface{}, len(b))
+	for ak, av := range a {
+		bv, ok := b[ak]
+		if ok {
+			if !reflect.DeepEqual(av, bv) {
+				// change
+				d[ak] = bv
+			} // else no change
+		} else {
+			// not present in b
+			//d[ak] = nil
+		}
+	}
+	for bk, bv := range b {
+		_, ok := a[bk]
+		if !ok {
+			// new value not in a
+			d[bk] = bv
+		}
+	}
+	return d
+}
+
+// ParsedRecordDeltas converts records from ParseRecord() into a list of record deltas.
+// The first record has full data and each following record only has fields that changed.
+func ParsedRecordDeltas(alldata []map[string]interface{}) []map[string]interface{} {
+	var alldeltas []map[string]interface{} = nil
+	if len(alldata) > 0 {
+		alldeltas = make([]map[string]interface{}, 1, len(alldata))
+		alldeltas[0] = alldata[0]
+		for i := 1; i < len(alldata); i++ {
+			alldeltas = append(alldeltas, parsedRecDiff(alldata[i-1], alldata[i]))
+		}
+	}
+	return alldeltas
+}
+
+// Convert *in-place* deltas into whole records
+func ParsedRecordRebuild(deltas []map[string]interface{}) {
+	cv := make(map[string]interface{}, 20)
+	for i, rec := range deltas {
+		for k, v := range rec {
+			cv[k] = v
+		}
+		for k, v := range cv {
+			deltas[i][k] = v
+		}
+	}
 }
