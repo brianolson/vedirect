@@ -14,5 +14,21 @@
   <div id="plots"></div>
   <script src="plotlib.js"></script>
   <script src="veplot.js"></script>
+  <script>
+var GET = function(url, handler) {
+  var http = new XMLHttpRequest();
+  http.onreadystatechange = handler;
+  http.timeout = 9000;
+  http.open("GET",url,true);
+  http.send();
+};
+var dataHandler = function() {
+  if (this.readyState == 4 && this.status == 200) {
+    var ob = JSON.parse(this.responseText);
+    window.bve.plotResponse(ob, 'plots');
+  }
+};
+GET('/ve.json', dataHandler);
+  </script>
 </body>
 </html>

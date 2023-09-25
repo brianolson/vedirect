@@ -1,20 +1,14 @@
-  var GET = function(url, handler) {
-    var http = new XMLHttpRequest();
-    http.onreadystatechange = handler;
-    http.timeout = 9000;
-    http.open("GET",url,true);
-    http.send();
-  };
+(function(){
 var plottables = {
-  "V": {"n":"battery voltage","u":"mV"},
-  "VPV": {"n":"panel voltage","u":"mV"},
-  "PPV": {"n":"panel power", "u":"W"},
-  "I": {"n":"current", "u":"mA"},
-  "T": {"n":"temperature", "u":"°C"},
-  "P": {"n":"power", "u":"W"},
-  "AC_OUT_V": {"n":"AC Volts", "u":"0.01V"},
-  "AC_OUT_I": {"n":"AC Amps", "u":"0.1A"},
-  "AC_OUT_S": {"n":"AC Power", "u":"VA"}
+  "V": {"n":"battery voltage","u":"V","m":0.001,"d":5},
+  "VPV": {"n":"panel voltage","u":"V","m":0.001,"d":5},
+  "PPV": {"n":"panel power", "u":"W","d":5},
+  "I": {"n":"current", "u":"A","m":0.001,"d":5},
+  "T": {"n":"temperature", "u":"°C","d":3},
+  "P": {"n":"power", "u":"W","d":5},
+  "AC_OUT_V": {"n":"AC Volts", "u":"V","m":0.01,"d":5},
+  "AC_OUT_I": {"n":"AC Amps", "u":"A","m":0.1,"d":5},
+  "AC_OUT_S": {"n":"AC Power", "u":"VA","d":5}
 };
 var extractTimeXy = function(d, name) {
   var ob = {};
@@ -30,47 +24,65 @@ var extractTimeXy = function(d, name) {
   }
   return xy;
 };
-  var dataHandler = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      var plots = document.getElementById('plots');
-      var ob = JSON.parse(this.responseText);
-      var data = ob.d;
-      var html = "";
-      var toplot = {};
-      var mint = data[0]["_t"];
-      var maxt = data[0]["_t"];
-      for (var i = 1, rec; rec = data[i]; i++) {
-	var t = data[i]["_t"];
-	if (t < mint) {
-	  mint = t;
-	}
-	if (t > maxt) {
-	  maxt = t;
-	}
-      }
-      var minxlabel = (new Date(mint)).toLocaleString();
-      var maxxlabel = (new Date(maxt)).toLocaleString();
-      for (var varname in plottables) {
-	var v0 = data[0][varname];
-	if ((v0 === undefined) || (v0 == null)) {
-	  continue;
-	}
-	var xy = extractTimeXy(data, varname);
-	if (xy && (xy.length > 0)) {
-	  var nicename = plottables[varname]["n"] || varname;
-	  if (plottables[varname]["u"]) {
-	    nicename += " (" + plottables[varname]["u"] + ")";
-	  }
-	  html += "<div class=\"plot\"><canvas class=\"plotc\" id=\"plot_" + varname + "\"></canvas><div class=\"plotl\">"+nicename+"</div></div>";
-	  toplot[varname] = xy;
-	}
-      }
-      plots.innerHTML = html;
-      var plotopts = {"xlabels":[minxlabel, maxxlabel], "minx":mint, "maxx":maxt};
-      for (var varname in toplot) {
-	var xy = toplot[varname];
-	lineplot(document.getElementById("plot_"+varname), xy, plotopts);
-      }
+window.bve = window.bve || {};
+window.bve.plotResponse = function(ob, elemid) {
+  var plots = document.getElementById(elemid);
+  var data = ob.d;
+  var html = "";
+  var toplot = {};
+  var mint = data[0]["_t"];
+  var maxt = data[0]["_t"];
+  for (var i = 1, rec; rec = data[i]; i++) {
+    var t = data[i]["_t"];
+    if (t < mint) {
+      mint = t;
     }
-  };
-  GET('/ve.json', dataHandler);
+    if (t > maxt) {
+      maxt = t;
+    }
+  }
+  var minxlabel = (new Date(mint)).toLocaleString();
+  var maxxlabel = (new Date(maxt)).toLocaleString();
+  for (var varname in plottables) {
+    var v0 = data[0][varname];
+    if ((v0 === undefined) || (v0 == null)) {
+      continue;
+    }
+    var xy = extractTimeXy(data, varname);
+    if (xy && (xy.length > 0)) {
+      var opt = {"xlabels":[minxlabel, maxxlabel], "minx":mint, "maxx":maxt};
+      var nicename = plottables[varname]["n"] || varname;
+      if (plottables[varname]["u"]) {
+	nicename += " (" + plottables[varname]["u"] + ")";
+      }
+      html += "<div class=\"plot\"><canvas class=\"plotc\" id=\"plot_" + varname + "\"></canvas><div class=\"plotl\">"+nicename+"</div></div>";
+      var multiplier = plottables[varname]["m"];
+      if (multiplier) {
+	for(var i = 1; i < xy.length; i += 2){
+	  xy[i] = xy[i] * multiplier;
+	}
+      }
+      var ydecimals = plottables[varname]["d"];
+      if (ydecimals) {
+	var miny = xy[1];
+	var maxy = xy[1];
+	var lasty = xy[1];
+	for (var i = 3; i < xy.length; i += 2) {
+	  var y = xy[i];
+	  if (y<miny) {miny = y;}
+	  if (y>maxy) {maxy = y;}
+	  lasty = y;
+	}
+	opt["ylabels"] =[miny.toPrecision(ydecimals), maxy.toPrecision(ydecimals), lasty.toPrecision(ydecimals)];
+      }
+      toplot[varname] = {"xy":xy, "opt":opt};
+    }
+  }
+  plots.innerHTML = html;
+  for (var varname in toplot) {
+    var xy = toplot[varname]["xy"];
+    var plotopts = toplot[varname]["opt"];
+    lineplot(document.getElementById("plot_"+varname), xy, plotopts);
+  }
+};
+})();
