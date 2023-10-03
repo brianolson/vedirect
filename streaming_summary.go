@@ -2,11 +2,13 @@ package vedirect
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +23,43 @@ var DebugWriter io.Writer = os.Stderr
 func debug(x string, args ...interface{}) {
 	if DebugEnabled {
 		fmt.Fprintf(DebugWriter, x+"\n", args...)
+	}
+}
+
+var ErrNotANumber = errors.New("could not convert non-number to int64")
+
+func numToInt64(x any) (v int64, err error) {
+	switch iv := x.(type) {
+	case int:
+		v = int64(iv)
+		return
+	case int32:
+		v = int64(iv)
+		return
+	case int64:
+		v = iv
+		return
+	case uint:
+		v = int64(iv)
+		return
+	case uint32:
+		v = int64(iv)
+		return
+	case uint64:
+		v = int64(iv)
+		return
+	case float32:
+		v = int64(iv)
+		return
+	case float64:
+		v = int64(iv)
+		return
+	case string:
+		v, err = strconv.ParseInt(iv, 10, 64)
+		return
+	default:
+		err = ErrNotANumber
+		return
 	}
 }
 
@@ -52,18 +91,21 @@ type StreamingSummary struct {
 	binLimitUnixMilli int64
 }
 
-func (sum *StreamingSummary) Add(rec map[string]interface{}) {
+var ErrNoTime = errors.New("record lacks _t time")
+var ErrTimeWrongType = errors.New("_t record wrong type not int64")
+
+func (sum *StreamingSummary) Add(rec map[string]interface{}) error {
 	rec_tx, ok := rec["_t"]
 	if !ok {
 		debug("cannot add record without _t time")
 		// WARNING ERROR ETC, cannot add without time
-		return
+		return ErrNoTime
 	}
-	rec_t, ok := rec_tx.(int64)
-	if !ok {
-		debug("record _t is not int64, got %T", rec_tx)
+	rec_t, err := numToInt64(rec_tx)
+	if err != nil {
+		debug("%v: record _t is not int64, got %T %#v", err, rec_tx, rec_tx)
 		// WARNING ERROR ETC, cannot add without time
-		return
+		return err
 	}
 
 	if sum.rawRecent == nil {
@@ -73,16 +115,17 @@ func (sum *StreamingSummary) Add(rec map[string]interface{}) {
 		}
 		sum.rawRecent = make([][]map[string]interface{}, 1, sum.rawCache)
 		sum.startRR0(rec, rec_t)
-		return
+		return nil
 	}
 	if rec_t > sum.binLimitUnixMilli {
 		// next bin!
 		sum.addSum(summarize(sum.rawRecent[0]))
 		sum.rotateRawRecent()
 		sum.startRR0(rec, rec_t)
-		return
+		return nil
 	}
 	sum.rawRecent[0] = append(sum.rawRecent[0], rec)
+	return nil
 }
 
 func (sum *StreamingSummary) startRR0(rec map[string]interface{}, rec_t int64) {
@@ -128,8 +171,8 @@ func (sum *StreamingSummary) addSum(rec map[string]interface{}) {
 		// WARNING ERROR ETC, cannot add without time
 		return
 	}
-	rec_t, ok := rec_tx.(int64)
-	if !ok {
+	rec_t, err := numToInt64(rec_tx)
+	if err != nil {
 		// WARNING ERROR ETC, cannot add without time
 		return
 	}
@@ -176,7 +219,8 @@ func (sum *StreamingSummary) GetRawRecent(after int64, limit int) []map[string]i
 	for _, subset := range sum.rawRecent {
 		for i := len(subset) - 1; i >= 0; i-- {
 			rec := subset[i]
-			if rec["_t"].(int64) <= after {
+			rec_t, _ := numToInt64(rec["_t"])
+			if rec_t <= after {
 				return out
 			}
 			out = append(out, rec)
@@ -210,7 +254,8 @@ func (sum *StreamingSummary) GetSummedRecent(after int64, limit int) []map[strin
 	for _, subset := range sum.binnedSummaries {
 		for i := len(subset) - 1; i >= 0; i-- {
 			rec := subset[i]
-			if rec["_t"].(int64) <= after {
+			rec_t, _ := numToInt64(rec["_t"])
+			if rec_t <= after {
 				return out
 			}
 			out = append(out, rec)
@@ -246,7 +291,9 @@ func (rts *RecTimeSort) Len() int {
 func (rts *RecTimeSort) Less(i, j int) bool {
 	a := (*rts)[i]
 	b := (*rts)[j]
-	return a["_t"].(int64) < b["_t"].(int64)
+	at, _ := numToInt64(a["_t"])
+	bt, _ := numToInt64(b["_t"])
+	return at < bt
 }
 func (rts *RecTimeSort) Swap(i, j int) {
 	t := (*rts)[i]
@@ -269,7 +316,7 @@ func (sum *StreamingSummary) GetData(raw_after int64) []map[string]interface{} {
 	}
 	var sumNewest int64 = 0
 	for _, rec := range sdat {
-		t := rec["_t"].(int64)
+		t, _ := numToInt64(rec["_t"])
 		if t > sumNewest && t < raw_after {
 			sumNewest = t
 		}
@@ -278,9 +325,9 @@ func (sum *StreamingSummary) GetData(raw_after int64) []map[string]interface{} {
 		debug("merge all raw")
 		return rdat
 	}
-	rawOldest := rdat[0]["_t"].(int64)
+	rawOldest, _ := numToInt64(rdat[0]["_t"])
 	for _, rec := range rdat {
-		t := rec["_t"].(int64)
+		t, _ := numToInt64(rec["_t"])
 		if t < rawOldest {
 			rawOldest = t
 		}
@@ -292,7 +339,7 @@ func (sum *StreamingSummary) GetData(raw_after int64) []map[string]interface{} {
 		sumKey := sumNewest
 		//sumKeyI := sumKeyI
 		for _, rec := range sdat {
-			t := rec["_t"].(int64)
+			t, _ := numToInt64(rec["_t"])
 			if t < sumKey && t > rawOldest {
 				sumKey = t
 				//sumKeyI = i
@@ -300,13 +347,13 @@ func (sum *StreamingSummary) GetData(raw_after int64) []map[string]interface{} {
 		}
 		alldata = make([]map[string]interface{}, 0, len(sdat)+len(rdat))
 		for _, rec := range sdat {
-			t := rec["_t"].(int64)
+			t, _ := numToInt64(rec["_t"])
 			if t <= sumKey {
 				alldata = append(alldata, rec)
 			}
 		}
 		for _, rec := range rdat {
-			t := rec["_t"].(int64)
+			t, _ := numToInt64(rec["_t"])
 			if t > sumKey {
 				alldata = append(alldata, rec)
 			}
@@ -444,18 +491,23 @@ func doMean(they []map[string]interface{}, k string, out map[string]interface{})
 		case int64:
 			isum += nv
 			icount += 1
+		case int32:
+			isum += int64(nv)
+			icount += 1
+		case float32:
+			fsum += float64(nv)
+			fcount += 1
 		case float64:
 			fsum += nv
 			fcount += 1
 		case string:
-			// TODO: warning
+			debug("doMean %#v got string %#v", k, nv)
 		default:
-			// TODO: error, warning, etc
+			debug("doMean %#v got %T %#v", k, v, v)
 		}
 	}
 	if icount != 0 {
 		if fcount != 0 {
-			// TODO: error, warning, etc
 			out[k] = (fsum + float64(isum)) / float64(icount+fcount)
 		} else {
 			out[k] = float64(isum) / float64(icount)
