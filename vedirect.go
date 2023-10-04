@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	ehex "encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -99,14 +100,19 @@ func Open(path string, out chan<- map[string]string, wg *sync.WaitGroup, ctx con
 		v.debug("%s: could not stat, %v", path, err)
 		return nil, err
 	}
-	var fin io.Reader
 	if (st.Mode() & charDevice) == charDevice {
 		v.debug("%s: is char device", path)
 		sc := serial.Config{Name: path, Baud: 19200}
-		fin, err = serial.OpenPort(&sc)
+		dev, derr := serial.OpenPort(&sc)
+		err = derr
+		v.fin = dev
+		v.fout = dev
+
 	} else {
 		v.debug("%s: is not char device, assuming debug file capture")
-		fin, err = os.OpenFile(path, os.O_RDONLY, 0777)
+		fin, ferr := os.OpenFile(path, os.O_RDONLY, 0777)
+		err = ferr
+		v.fin = fin
 	}
 	if err != nil {
 		v.debug("%s: could not open, %v", path, err)
@@ -116,7 +122,6 @@ func Open(path string, out chan<- map[string]string, wg *sync.WaitGroup, ctx con
 	if v.ctx == nil {
 		v.ctx = context.Background()
 	}
-	v.fin = fin
 	v.out = out
 	v.wg = wg
 	if v.wg == nil {
@@ -245,6 +250,8 @@ func (v *Vedirect) finishHexMessage() {
 	v.out <- data
 }
 
+var ErrNoOutput = errors.New("no output configured")
+
 // SendHexCommand sends a HEX protocol command to a VE.Direct device.
 //
 // If successful, response will come in normal message stream parsed into data["_x"] = "aabbccddeeff"
@@ -253,6 +260,10 @@ func (v *Vedirect) finishHexMessage() {
 //
 // Actual message fields vary by length and content and are left to application code, but you might want "encoding/binary" LittleEndian.Uint16([]byte) and .PutUint16([]byte, uint16)
 func (v *Vedirect) SendHexCommand(cmd Command, msg []byte) error {
+	if v.fout == nil {
+		v.debug("could not send hex command, null out")
+		return ErrNoOutput
+	}
 	command := formatHexCommand(cmd, msg)
 	_, err := v.fout.Write(command)
 	return err

@@ -40,13 +40,16 @@ var (
 	verbose      bool
 	sendJsonGzip bool
 	serveAddr    string
+
+	temperaturePollPeriod time.Duration
 )
 
 func main() {
-	flag.IntVar(&sendPeriod, "send-period", 1000, "after this number of messages try to send accumulated data")
+	flag.IntVar(&sendPeriod, "send-period", 3000, "after this number of messages try to send accumulated data")
 	flag.StringVar(&postUrl, "post", "", "URL to POST application/json message to (May be \"-\" for stdout)")
 	flag.StringVar(&devicePath, "dev", "", "device to read")
 	flag.DurationVar(&retryPeriod, "retry", 60*time.Second, "Duration between retries")
+	flag.DurationVar(&temperaturePollPeriod, "tpoll", 100*365*24*time.Hour, "period to poll MPPT internal temperature")
 	flag.BoolVar(&verbose, "v", false, "verbose debug out")
 	flag.BoolVar(&sendJsonGzip, "z", true, "sent application/gzip compress of json")
 	flag.StringVar(&serveAddr, "serve", "", "host:port to serve http API from")
@@ -68,10 +71,13 @@ func main() {
 	}
 	recChan := make(chan map[string]string, 10)
 	var wg sync.WaitGroup
-	_, err := vedirect.Open(devicePath, recChan, &wg, context.Background(), dout, vedirect.AddTime)
+	vec, err := vedirect.Open(devicePath, recChan, &wg, context.Background(), dout, vedirect.AddTime)
 	maybefail(err, "%s: Open, %v", devicePath, err)
+	// TODO: add shutdown Context
 	wg.Add(1)
 	go mainThread(recChan, &wg)
+	wg.Add(1)
+	go tpollThread(vec, &wg)
 	wg.Wait()
 }
 
@@ -213,6 +219,18 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 				reqStart <- req
 			}
 		}
+	}
+}
+
+func tpollThread(vec *vedirect.Vedirect, wg *sync.WaitGroup) {
+	if wg != nil {
+		defer wg.Done()
+	}
+	temperaturePollTikcker := time.NewTicker(temperaturePollPeriod)
+	defer temperaturePollTikcker.Stop()
+	for _ = range temperaturePollTikcker.C {
+		// 0xEDDB
+		vec.SendHexCommand(vedirect.Get, []byte{0xDB, 0xED, 0x00})
 	}
 }
 
