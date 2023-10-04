@@ -253,14 +253,29 @@ func (v *Vedirect) finishHexMessage() {
 //
 // Actual message fields vary by length and content and are left to application code, but you might want "encoding/binary" LittleEndian.Uint16([]byte) and .PutUint16([]byte, uint16)
 func (v *Vedirect) SendHexCommand(cmd Command, msg []byte) error {
-	out := make([]byte, 2+(len(msg)*2))
+	command := formatHexCommand(cmd, msg)
+	_, err := v.fout.Write(command)
+	return err
+}
+
+func formatHexCommand(cmd Command, msg []byte) []byte {
+	hexSum := uint(cmd)
+	out := make([]byte, 4+(len(msg)*2))
 	wat := []byte{byte(cmd)}
+	for _, c := range msg {
+		hexSum += uint(c)
+	}
+	cs := (0x055 - (hexSum & 0x0ff)) & 0x0ff
+	if (cs+hexSum)&0x0ff != 0x055 {
+		panic("can't generate a cs")
+	}
 	ehex.Encode(out, wat)
 	ehex.Encode(out[2:], msg)
+	wat[0] = uint8(cs & 0x0ff)
+	ehex.Encode(out[2+(len(msg)*2):], wat)
 	upper := strings.ToUpper(string(out[1:]))
 	command := fmt.Sprintf(":%s\n", upper)
-	_, err := v.fout.Write([]byte(command))
-	return err
+	return []byte(command)
 }
 
 func (v *Vedirect) readThread() {

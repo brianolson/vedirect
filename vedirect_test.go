@@ -36,3 +36,12 @@ func TestFloatWholeUnits(t *testing.T) {
 		}
 	}
 }
+
+func TestHexCommand(t *testing.T) {
+	msg := []byte{0xf0, 0xed, 0x00}
+	command := string(formatHexCommand(Get, msg))
+	expected := ":7F0ED0071\n"
+	if command != expected {
+		t.Errorf("got command %#v, wanted %#v", command, expected)
+	}
+}
