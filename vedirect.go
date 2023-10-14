@@ -540,6 +540,7 @@ func StringRecordDeltas(batch []map[string]string, deltas []map[string]interface
 	if deltas == nil {
 		deltas = make([]map[string]interface{}, 0, len(batch))
 	}
+	last := make(map[string]string, 20)
 	for ; pos < len(batch); pos++ {
 		var nrec map[string]string
 		if (pos % keyframePeriod) == 0 {
@@ -548,9 +549,12 @@ func StringRecordDeltas(batch []map[string]string, deltas []map[string]interface
 				nrec[k] = v
 			}
 		} else {
-			nrec = stringRecDiff(batch[pos-1], batch[pos])
+			nrec = stringRecDiff(last, batch[pos])
 		}
 		deltas = append(deltas, ParseRecord(nrec))
+		for k, v := range batch[pos] {
+			last[k] = v
+		}
 	}
 	return deltas
 }
@@ -583,11 +587,15 @@ func parsedRecDiff(a, b map[string]interface{}) map[string]interface{} {
 // The first record has full data and each following record only has fields that changed.
 func ParsedRecordDeltas(alldata []map[string]interface{}) []map[string]interface{} {
 	var alldeltas []map[string]interface{} = nil
+	last := make(map[string]interface{}, 20)
 	if len(alldata) > 0 {
-		alldeltas = make([]map[string]interface{}, 1, len(alldata))
-		alldeltas[0] = alldata[0]
-		for i := 1; i < len(alldata); i++ {
-			alldeltas = append(alldeltas, parsedRecDiff(alldata[i-1], alldata[i]))
+		alldeltas = make([]map[string]interface{}, 0, len(alldata))
+		for i := 0; i < len(alldata); i++ {
+			nrec := parsedRecDiff(last, alldata[i])
+			alldeltas = append(alldeltas, nrec)
+			for k, v := range alldata[i] {
+				last[k] = v
+			}
 		}
 	}
 	return alldeltas
