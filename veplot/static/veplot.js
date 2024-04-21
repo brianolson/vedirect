@@ -24,9 +24,20 @@ var extractTimeXy = function(d, name) {
   }
   return xy;
 };
+var maxGapTrim = function(xy, maxgap) {
+  var prevt = xy[xy.length - 2];
+  for (var i = xy.length - 4; i >= 0; i -= 2) {
+    var dt = prevt - xy[i];
+    if (dt > maxgap) {
+      return xy.slice(i+2);
+    }
+  }
+  return xy;
+};
 window.bve = window.bve || {};
-window.bve.plotResponse = function(ob, elemid) {
+window.bve.plotResponse = function(ob, elemid, veopt) {
   var plots = document.getElementById(elemid);
+  veopt = veopt || {};
   var data = ob.d;
   var html = "";
   var toplot = {};
@@ -41,6 +52,7 @@ window.bve.plotResponse = function(ob, elemid) {
       maxt = t;
     }
   }
+  // TODO: trim data before some absolute time previous to now, it prevents the problem of data stopping weeks ago and then a few new points added now as it starts again. OR ad some clever explicit discontinuity mode to plotlib |^-_-|"3 week gap|^-_-|
   var minxlabel = (new Date(mint)).toLocaleString();
   var maxxlabel = (new Date(maxt)).toLocaleString();
   for (var varname in plottables) {
@@ -48,14 +60,21 @@ window.bve.plotResponse = function(ob, elemid) {
     if ((v0 === undefined) || (v0 == null)) {
       continue;
     }
+    var localmint = mint;
+    var localminxlabel = minxlabel;
     var xy = extractTimeXy(data, varname);
+    if (veopt.maxgap) {
+      xy = maxGapTrim(xy, veopt.maxgap);
+      localmint = xy[0];
+      localminxlabel = (new Date(localmint)).toLocaleString();
+    }
     if (xy && (xy.length > 0)) {
-      var opt = {"xlabels":[minxlabel, maxxlabel], "minx":mint, "maxx":maxt};
+      var opt = {"xlabels":[localminxlabel, maxxlabel], "minx":localmint, "maxx":maxt};
       var nicename = plottables[varname]["n"] || varname;
       if (plottables[varname]["u"]) {
 	nicename += " (" + plottables[varname]["u"] + ")";
       }
-      html += "<div class=\"plot\"><canvas class=\"plotc\" id=\"plot_" + varname + "\"></canvas><div class=\"plotl\">"+nicename+"</div></div>";
+      html += "<div class=\"plot\"><div class=\"plotl\">"+nicename+"</div><canvas class=\"plotc\" id=\"plot_" + varname + "\"></canvas></div>";
       var multiplier = plottables[varname]["m"];
       if (multiplier) {
 	for(var i = 1; i < xy.length; i += 2){

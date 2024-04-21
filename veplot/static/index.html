@@ -25,7 +25,7 @@ var GET = function(url, handler) {
 var dataHandler = function() {
   if (this.readyState == 4 && this.status == 200) {
     var ob = JSON.parse(this.responseText);
-    window.bve.plotResponse(ob, 'plots');
+    window.bve.plotResponse(ob, 'plots', {'maxgap':14*24*3600*1000});
   }
 };
 GET('/ve.json', dataHandler);
