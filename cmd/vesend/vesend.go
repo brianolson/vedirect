@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"strings"
@@ -42,6 +43,7 @@ var (
 	serveAddr    string
 
 	temperaturePollPeriod time.Duration
+	battTempPollPeriod    time.Duration
 )
 
 func main() {
@@ -49,7 +51,8 @@ func main() {
 	flag.StringVar(&postUrl, "post", "", "URL to POST application/json message to (May be \"-\" for stdout)")
 	flag.StringVar(&devicePath, "dev", "", "device to read")
 	flag.DurationVar(&retryPeriod, "retry", 60*time.Second, "Duration between retries")
-	flag.DurationVar(&temperaturePollPeriod, "tpoll", 100*365*24*time.Hour, "period to poll MPPT internal temperature")
+	flag.DurationVar(&temperaturePollPeriod, "tpoll", 0, "period to poll MPPT internal temperature")
+	flag.DurationVar(&battTempPollPeriod, "btpoll", 0, "period to poll battery temperature")
 	flag.BoolVar(&verbose, "v", false, "verbose debug out")
 	flag.BoolVar(&sendJsonGzip, "z", true, "sent application/gzip compress of json")
 	flag.StringVar(&serveAddr, "serve", "", "host:port to serve http API from")
@@ -76,9 +79,16 @@ func main() {
 	// TODO: add shutdown Context
 	wg.Add(1)
 	go mainThread(recChan, &wg)
-	wg.Add(1)
-	go tpollThread(vec, &wg)
+	if temperaturePollPeriod != 0 {
+		wg.Add(1)
+		go tpollThread(vec, temperaturePollPeriod, MPPT_TEMP_GET, &wg)
+	}
+	if battTempPollPeriod != 0 {
+		wg.Add(1)
+		go tpollThread(vec, battTempPollPeriod, MPPT_BATT_TEMP_GET, &wg)
+	}
 	wg.Wait()
+
 }
 
 type Server struct {
@@ -136,6 +146,8 @@ func (sh *StaticHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "nope", http.StatusNotFound)
 	}
 }
+
+// TODO: catch shutdown signal and try to send immediately
 
 // receive data from Vedirect parser, sometimes poke the sendThread.
 func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
@@ -222,15 +234,23 @@ func mainThread(recChan <-chan map[string]string, wg *sync.WaitGroup) {
 	}
 }
 
-func tpollThread(vec *vedirect.Vedirect, wg *sync.WaitGroup) {
+// 0xEDDB
+// returns int16 0.01 deg C
+var MPPT_TEMP_GET []byte = []byte{0xDB, 0xED, 0x00}
+
+// 0xEDEC
+// returns uint16 0.01 deg K
+var MPPT_BATT_TEMP_GET []byte = []byte{0xEC, 0xED, 0x00}
+
+func tpollThread(vec *vedirect.Vedirect, period time.Duration, command []byte, wg *sync.WaitGroup) {
 	if wg != nil {
 		defer wg.Done()
 	}
-	temperaturePollTikcker := time.NewTicker(temperaturePollPeriod)
+	time.Sleep(time.Duration(rand.Int63n(period.Microseconds())) * time.Microsecond)
+	temperaturePollTikcker := time.NewTicker(period)
 	defer temperaturePollTikcker.Stop()
 	for _ = range temperaturePollTikcker.C {
-		// 0xEDDB
-		vec.SendHexCommand(vedirect.Get, []byte{0xDB, 0xED, 0x00})
+		vec.SendHexCommand(vedirect.Get, command)
 	}
 }
 
