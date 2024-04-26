@@ -8,7 +8,9 @@ var plottables = {
   "P": {"n":"power", "u":"W","d":5},
   "AC_OUT_V": {"n":"AC Volts", "u":"V","m":0.01,"d":5},
   "AC_OUT_I": {"n":"AC Amps", "u":"A","m":0.1,"d":5},
-  "AC_OUT_S": {"n":"AC Power", "u":"VA","d":5}
+  "AC_OUT_S": {"n":"AC Power", "u":"VA","d":5},
+  "battery temperature": {"n":"battery temperature", "u":"°K", "m":0.01, "d":2},
+  "charger internal temperature": {"n":"charger temperature", "u":"°C", "m":0.01, "d":2}
 };
 var extractTimeXy = function(d, name) {
   var ob = {};
@@ -43,6 +45,7 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
   var toplot = {};
   var mint = data[0]["_t"];
   var maxt = data[0]["_t"];
+  var datavars = {};
   for (var i = 1, rec; rec = data[i]; i++) {
     var t = data[i]["_t"];
     if (t < mint) {
@@ -51,13 +54,15 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
     if (t > maxt) {
       maxt = t;
     }
+    for (var dk in data[i]) {
+      datavars[dk] = true;
+    }
   }
   // TODO: trim data before some absolute time previous to now, it prevents the problem of data stopping weeks ago and then a few new points added now as it starts again. OR ad some clever explicit discontinuity mode to plotlib |^-_-|"3 week gap|^-_-|
   var minxlabel = (new Date(mint)).toLocaleString();
   var maxxlabel = (new Date(maxt)).toLocaleString();
   for (var varname in plottables) {
-    var v0 = data[0][varname];
-    if ((v0 === undefined) || (v0 == null)) {
+    if (!datavars[varname]) {
       continue;
     }
     var localmint = mint;

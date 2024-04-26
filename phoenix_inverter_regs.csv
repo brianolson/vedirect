@@ -1,0 +1,54 @@
+# address,name,multiplier,type,unit,summary
+# product information registers
+0x0100,product id,,u32,,mode
+0x0101,hardware version,,u24,,mode
+0x0102,software version,,u32,,mode
+0x010a,serial number,,,,mode
+
+# generic device status registers
+0x0201,device state,,u8,,mode
+0x0207,device off reason,,u32,,mode
+0x031c,warning reason,,u16,,mode
+0x031e,alarm reason,,u16,,mode
+
+# generic device control registers
+0x0090,BLE mode,,u8,,mode
+0x0200,device mode,,u8,,mode
+0xec41,settings changed,,u32,,mode
+
+# inverter operation registers
+0x1040,history time,,u32,seconds,max
+0x1041,history energy,0.01,u32,kVAh,max
+0x2201,AC out current,0.1,s16,A,mean
+0x2200,AC out voltage,0.01,s16,V,mean
+0x2205,AC out apparent power,,s32,VA,mean
+0xeb4e,INV loop get IINV,0.001,s16,A,mean
+0xed8d,DC channel1 voltage,0.01,s16,V,mean
+
+# user AC-out control registers
+0x0230,AC out voltage setpoint,0.01,u16,V,mode
+0x0231,AC out voltage setpoint min,0.01,u16,V,mode
+0x0232,AC out voltage setpoint max,0.01,u16,V,mode
+0x2206,AC load sense power threshold,,u16,VA,mode
+0x2207,AC load sense power clear,,u16,VA,mode
+0xEB03,inv wave set 50Hz not 60Hz,,u8,,mode
+0xeb04,INV oper eco mode inv min,0.001,s16,A,mode
+0xeb06,INV oper eco mode retry time,0.25,u8,seconds,mode
+0xeb10,INV oper eco load detect periods,0.016,u8,seconds,mode
+
+# user battery control registers
+0x2210,shutdown low voltage set,0.01,u16,V,mode
+0x0320,alarm low voltage set,0.01,u16,V,mode
+0x0321,alarm low voltage clear,0.01,u16,V,mode
+0x2211,voltage range min,0.01,u16,V,mode
+0x2212,voltage range max,0.01,u16,V,mode
+0xebba,inv prot ubat dyn cutoff enable,,u8,,mode
+0xebb7,inv prot ubat dyn cutoff factor,,u16,,mode
+0xebb5,inv prot ubat dyn cutoff factor 2000,,u16,,mode
+0xebb3,inv prot ubat dyn cutoff factor 250,,u16,,mode
+0xebb2,inv prot ubat dyn cutoff factor 5,,u16,,mode
+0xebb1,inv prot ubat dyn cutoff voltage,0.001,u16,V,mode
+
+# relay control registers
+0x034e,relay control,,u8,,mode
+0x034f,relay mode,,u8,,mode

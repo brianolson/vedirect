@@ -42,6 +42,8 @@ var (
 	filePattern string
 	verbose     bool
 
+	maxAge time.Duration
+
 	pathMatcher *regexp.Regexp
 )
 
@@ -50,8 +52,12 @@ func main() {
 	flag.StringVar(&serveAddr, "serve", "", "host:port to serve http API from")
 	flag.StringVar(&archiveDir, "dir", "", "archive dir full of .json.gz")
 	flag.StringVar(&filePattern, "pat", ".*\\.json\\.gz", "Go regexp to match archive files in dir")
+	flag.DurationVar(&maxAge, "max-age", 3*24*time.Hour, "maximum age of archive file to load")
 	flag.Parse()
 	vedirect.DebugEnabled = verbose
+	if verbose {
+		vedirect.DebugWriter = os.Stdout
+	}
 
 	var err error
 	pathMatcher, err = regexp.Compile(filePattern)
@@ -108,9 +114,16 @@ func (they *nameMtimeNewestFirst) Swap(i, j int) {
 	(*they)[j] = t
 }
 
+type Server struct {
+	sum vedirect.StreamingSummary
+	l   sync.RWMutex
+
+	loadedPaths []string
+}
+
 func (sums *Server) loadDir(dirpath string) error {
 	now := time.Now()
-	newestWeek := now.Add(-3 * 24 * time.Hour)
+	newestWeek := now.Add(-maxAge)
 	ents, err := os.ReadDir(dirpath)
 	if err != nil {
 		return fmt.Errorf("%#v: readdir, %w", dirpath, err)
@@ -155,13 +168,6 @@ func (sums *Server) loadDir(dirpath string) error {
 		return fmt.Errorf("%#v: %d errors", dirpath, len(errs))
 	}
 	return nil
-}
-
-type Server struct {
-	sum vedirect.StreamingSummary
-	l   sync.RWMutex
-
-	loadedPaths []string
 }
 
 func (sums *Server) ServeHTTP(out http.ResponseWriter, req *http.Request) {
@@ -288,6 +294,8 @@ func debug(msg string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 }
 
+// watch for new files
+// handoff to createdWatcher()
 func watcherThread(ctx context.Context, created chan<- string, wg *sync.WaitGroup) {
 	if wg != nil {
 		defer wg.Done()
@@ -326,6 +334,8 @@ func watcherThread(ctx context.Context, created chan<- string, wg *sync.WaitGrou
 	}
 }
 
+// watch files for stat() to show their modified time not changing
+// hand off to readyThread()
 func createdWatcher(ctx context.Context, created <-chan string, ready chan<- string, wg *sync.WaitGroup) {
 	if wg != nil {
 		defer wg.Done()

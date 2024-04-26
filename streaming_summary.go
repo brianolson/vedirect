@@ -373,6 +373,8 @@ func (sum *StreamingSummary) GetData(raw_after int64) []map[string]interface{} {
 // mean - average of data points
 // mode - most common data value
 // last - last data value
+// max - greatest value
+// min - least value
 const fieldSummaryModes = `V mean
 V2 mean
 V3 mean
@@ -458,23 +460,68 @@ func init() {
 
 func summarize(they []map[string]interface{}) map[string]interface{} {
 	allKeys := make(map[string]bool)
+	xcount := 0
 	for _, rec := range they {
 		for k := range rec {
 			allKeys[k] = true
+			if k == "_x" {
+				xcount++
+			}
 		}
 	}
-	out := make(map[string]interface{}, len(allKeys))
+	hexKeys := make(map[string]bool)
+	hexThey := make([]map[string]interface{}, 0, xcount)
+	hexModes := make(map[string]string)
+	for _, rec := range they {
+		xv, ok := rec["_x"]
+		if !ok {
+			continue
+		}
+		xs, ok := xv.(string)
+		if !ok {
+			continue
+		}
+		value, err := ParseHexRecord(xs)
+		if err != nil {
+			continue
+		}
+		if value.Register.SummaryMode == "" {
+			continue
+		}
+		hexModes[value.Register.Name] = value.Register.SummaryMode
+		hexKeys[value.Register.Name] = true
+		theyrec := make(map[string]interface{}, 1)
+		theyrec[value.Register.Name] = value.Value
+		hexThey = append(hexThey, theyrec)
+	}
+	out := make(map[string]interface{}, len(allKeys)+len(hexKeys))
+	summaryInner(allKeys, summaryModes, they, out)
+	if len(hexKeys) > 0 {
+		summaryInner(hexKeys, hexModes, hexThey, out)
+	}
+	return out
+}
+
+func summaryInner(allKeys map[string]bool, modes map[string]string, they []map[string]interface{}, out map[string]interface{}) {
 	for k := range allKeys {
-		smode := summaryModes[k]
+		if k == "_x" {
+			continue
+		}
+		smode := modes[k]
 		if smode == "mean" {
 			doMean(they, k, out)
 		} else if smode == "last" {
 			doLast(they, k, out)
 		} else if smode == "mode" {
 			doMode(they, k, out)
+		} else if smode == "min" {
+			doMin(they, k, out)
+		} else if smode == "max" {
+			doMax(they, k, out)
+		} else {
+			debug("key %#v unk sum mode %#v", k, smode)
 		}
 	}
-	return out
 }
 
 func doMean(they []map[string]interface{}, k string, out map[string]interface{}) {
@@ -491,7 +538,16 @@ func doMean(they []map[string]interface{}, k string, out map[string]interface{})
 		case int64:
 			isum += nv
 			icount += 1
+		case int16:
+			isum += int64(nv)
+			icount += 1
 		case int32:
+			isum += int64(nv)
+			icount += 1
+		case uint16:
+			isum += int64(nv)
+			icount += 1
+		case uint32:
 			isum += int64(nv)
 			icount += 1
 		case float32:
@@ -514,6 +570,84 @@ func doMean(they []map[string]interface{}, k string, out map[string]interface{})
 		}
 	} else if fcount != 0 {
 		out[k] = fsum / float64(fcount)
+	}
+}
+
+func doMax(they []map[string]interface{}, k string, out map[string]interface{}) {
+	mv := float64(0.0)
+	first := true
+	for _, rec := range they {
+		v, has := rec[k]
+		if !has {
+			continue
+		}
+		var fv float64
+		has = false
+		switch nv := v.(type) {
+		case int64:
+			fv = float64(nv)
+			has = true
+		case int32:
+			fv = float64(nv)
+			has = true
+		case float32:
+			fv = float64(nv)
+			has = true
+		case float64:
+			fv = float64(nv)
+			has = true
+		default:
+		}
+		if has {
+			if first {
+				mv = fv
+				first = false
+			} else if fv > mv {
+				mv = fv
+			}
+		}
+	}
+	if !first {
+		out[k] = mv
+	}
+}
+
+func doMin(they []map[string]interface{}, k string, out map[string]interface{}) {
+	mv := float64(0.0)
+	first := true
+	for _, rec := range they {
+		v, has := rec[k]
+		if !has {
+			continue
+		}
+		var fv float64
+		has = false
+		switch nv := v.(type) {
+		case int64:
+			fv = float64(nv)
+			has = true
+		case int32:
+			fv = float64(nv)
+			has = true
+		case float32:
+			fv = float64(nv)
+			has = true
+		case float64:
+			fv = float64(nv)
+			has = true
+		default:
+		}
+		if has {
+			if first {
+				mv = fv
+				first = false
+			} else if fv < mv {
+				mv = fv
+			}
+		}
+	}
+	if !first {
+		out[k] = mv
 	}
 }
 
