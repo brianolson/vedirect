@@ -9,7 +9,7 @@ var plottables = {
   "AC_OUT_V": {"n":"AC Volts", "u":"V","m":0.01,"d":5},
   "AC_OUT_I": {"n":"AC Amps", "u":"A","m":0.1,"d":5},
   "AC_OUT_S": {"n":"AC Power", "u":"VA","d":5},
-  "battery temperature": {"n":"battery temperature", "u":"°K", "m":0.01, "d":2},
+  "battery temperature": {"n":"battery temperature", "u":"°C", "m":0.01, "offset": -273.15, "d":2},
   "charger internal temperature": {"n":"charger temperature", "u":"°C", "m":0.01, "d":2}
 };
 var extractTimeXy = function(d, name) {
@@ -84,6 +84,12 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
       if (multiplier) {
 	for(var i = 1; i < xy.length; i += 2){
 	  xy[i] = xy[i] * multiplier;
+	}
+      }
+      var offset = plottables[varname]["offset"];
+      if (offset) {
+	for(var i = 1; i < xy.length; i += 2){
+	  xy[i] = xy[i] + offset;
 	}
       }
       var ydecimals = plottables[varname]["d"];

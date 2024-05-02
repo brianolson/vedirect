@@ -19,7 +19,6 @@
 0xedf1,battery type,,u8,,mode
 0xedf0,battery maximum current,0.1,u16,A,mode
 0xedef,battery voltage,,u8,V,mode
-0xedec,battery temperature,0.01,u16,K,mode
 0xedea,battery voltage setting,,u8,V,mode
 0xede8,BSM present,,u8,,mode
 0xede7,tail current,0.1,u16,,mode

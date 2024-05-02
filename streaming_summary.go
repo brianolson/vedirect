@@ -33,6 +33,9 @@ func numToInt64(x any) (v int64, err error) {
 	case int:
 		v = int64(iv)
 		return
+	case int16:
+		v = int64(iv)
+		return
 	case int32:
 		v = int64(iv)
 		return
@@ -40,6 +43,9 @@ func numToInt64(x any) (v int64, err error) {
 		v = iv
 		return
 	case uint:
+		v = int64(iv)
+		return
+	case uint16:
 		v = int64(iv)
 		return
 	case uint32:
@@ -487,6 +493,13 @@ func summarize(they []map[string]interface{}) map[string]interface{} {
 		}
 		if value.Register.SummaryMode == "" {
 			continue
+		}
+		if value.Register.Address == 0xedec {
+			kv, err := numToInt64(value.Value)
+			if (err == nil) && kv > 50000 {
+				// over 500.00 Kelvin, probably an error code
+				continue
+			}
 		}
 		hexModes[value.Register.Name] = value.Register.SummaryMode
 		hexKeys[value.Register.Name] = true
