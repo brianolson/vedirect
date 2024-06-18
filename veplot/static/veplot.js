@@ -12,6 +12,10 @@ var plottables = {
   "battery temperature": {"n":"battery temperature", "u":"°C", "m":0.01, "offset": -273.15, "d":2},
   "charger internal temperature": {"n":"charger temperature", "u":"°C", "m":0.01, "d":2}
 };
+var numberStats = {
+  "H20": {"n":"Yield today","u":"kWh","m":0.01,"d":3},
+  "H22": {"n":"Yield yesterday","u":"kWh","m":0.01,"d":3},
+};
 var extractTimeXy = function(d, name, veopt) {
   var ob = {};
   var xy = [];
@@ -33,6 +37,18 @@ var extractTimeXy = function(d, name, veopt) {
     }
   }
   return xy;
+};
+var getNumbers = function(data, veopt){
+  var lastValues = {};
+  for (var i = 0, rec; rec = data[i]; i++) {
+    for (var name in numberStats) {
+      var val = rec[name];
+      if (val) {
+	lastValues[name] = val;
+      }
+    }
+  }
+  return lastValues;
 };
 var maxGapTrim = function(xy, maxgap) {
   var prevt = xy[xy.length - 2];
@@ -128,6 +144,23 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
       html += "<div class=\"plot\"><div class=\"plotl\">"+nicename+"</div><canvas class=\"plotc\" id=\"plot_" + elemid + "_" + varname + "\"></canvas></div>";
       toplot[varname] = {"xy":xy, "opt":opt};
     }
+  }
+  var numberStatValues = getNumbers(data, veopt);
+  if (numberStatValues) {
+    html += "<div class=\"stats\">";
+    for (var name in numberStatValues) {
+      var ns = numberStats[name];
+      var val = numberStatValues[name];
+      if (ns.m) {
+	val = val * ns.m;
+      }
+      html += "<div class=\"stat\">" + ns.n + " " + val.toPrecision(ns.d);
+      if (ns.u) {
+	html += " " + ns.u;
+      }
+      html += "</div>";
+    }
+    html += "</div>";
   }
   plots.innerHTML = html;
   for (var varname in toplot) {
