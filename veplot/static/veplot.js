@@ -12,12 +12,20 @@ var plottables = {
   "battery temperature": {"n":"battery temperature", "u":"°C", "m":0.01, "offset": -273.15, "d":2},
   "charger internal temperature": {"n":"charger temperature", "u":"°C", "m":0.01, "d":2}
 };
-var extractTimeXy = function(d, name) {
+var extractTimeXy = function(d, name, veopt) {
   var ob = {};
   var xy = [];
+  var tLimitMin = veopt.tmin;
+  var tLimitMax = veopt.tmax;
   for (var i = 0, rec; rec = d[i]; i++) {
     ob = Object.assign(ob, rec);
     var time = ob["_t"];
+    if (tLimitMin && (time < tLimitMin)) {
+      continue;
+    }
+    if (tLimitMax && (time > tLimitMax)) {
+      continue;
+    }
     var val = ob[name];
     if ((val != null) && (val != undefined)) {
       xy.push(time);
@@ -65,9 +73,21 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
     if (!datavars[varname]) {
       continue;
     }
+    if (veopt.plotvars) {
+      var has = false;
+      for (var i = 0, pvi; pvi = veopt.plotvars[i]; i++) {
+	if (pvi == varname) {
+	  has = true;
+	  break;
+	}
+      }
+      if (!has) {
+	continue;
+      }
+    }
     var localmint = mint;
     var localminxlabel = minxlabel;
-    var xy = extractTimeXy(data, varname);
+    var xy = extractTimeXy(data, varname, veopt);
     if (veopt.maxgap) {
       xy = maxGapTrim(xy, veopt.maxgap);
       localmint = xy[0];
@@ -79,7 +99,7 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
       if (plottables[varname]["u"]) {
 	nicename += " (" + plottables[varname]["u"] + ")";
       }
-      html += "<div class=\"plot\"><div class=\"plotl\">"+nicename+"</div><canvas class=\"plotc\" id=\"plot_" + varname + "\"></canvas></div>";
+      html += "<div class=\"plot\"><div class=\"plotl\">"+nicename+"</div><canvas class=\"plotc\" id=\"plot_" + elemid + "_" + varname + "\"></canvas></div>";
       var multiplier = plottables[varname]["m"];
       if (multiplier) {
 	for(var i = 1; i < xy.length; i += 2){
@@ -112,7 +132,7 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
   for (var varname in toplot) {
     var xy = toplot[varname]["xy"];
     var plotopts = toplot[varname]["opt"];
-    lineplot(document.getElementById("plot_"+varname), xy, plotopts);
+    lineplot(document.getElementById("plot_"+elemid + "_" + varname), xy, plotopts);
   }
 };
 })();

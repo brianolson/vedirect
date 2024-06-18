@@ -15,6 +15,7 @@
   <script src="plotlib.js"></script>
   <script src="veplot.js"></script>
   <script>
+(function(){
 var GET = function(url, handler) {
   var http = new XMLHttpRequest();
   http.onreadystatechange = handler;
@@ -22,13 +23,43 @@ var GET = function(url, handler) {
   http.open("GET",url,true);
   http.send();
 };
-var dataHandler = function() {
+var kpvHandler = function() {
   if (this.readyState == 4 && this.status == 200) {
     var ob = JSON.parse(this.responseText);
     window.bve.plotResponse(ob, 'plots', {'maxgap':14*24*3600*1000});
   }
 };
-GET('/ve.json', dataHandler);
-  </script>
+GET('/ve.json', kpvHandler);
+  var refreshPeriod = 137000; // milliseconds
+  var refresherTimeout = null;
+  var lastRefresh = (new Date()).valueOf();
+  var inner_refresher = function() {
+      refresherTimeout = null;
+      if (document.hidden) {return;}
+      GET("/ve.json", kpvHandler);
+      lastRefresh = (new Date()).valueOf();
+      refresherTimeout = setTimeout(inner_refresher, refreshPeriod);
+  };
+  refresherTimeout = setTimeout(inner_refresher, refreshPeriod);
+  document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+	  if (refresherTimeout != null) {
+	      clearTimeout(refresherTimeout);
+	      refresherTimeout = null;
+	  }
+      } else {
+	  if (refresherTimeout == null) {
+	      var now = (new Date()).valueOf();
+	      var dt = (lastRefresh + refreshPeriod) - now;
+	      if (dt < 1000) {
+		  inner_refresher();
+	      } else {
+		  refresherTimeout = setTimeout(inner_refresher, dt);
+	      }
+	  }
+      }
+  });
+})();
+</script>
 </body>
 </html>
