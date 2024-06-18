@@ -99,7 +99,6 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
       if (plottables[varname]["u"]) {
 	nicename += " (" + plottables[varname]["u"] + ")";
       }
-      html += "<div class=\"plot\"><div class=\"plotl\">"+nicename+"</div><canvas class=\"plotc\" id=\"plot_" + elemid + "_" + varname + "\"></canvas></div>";
       var multiplier = plottables[varname]["m"];
       if (multiplier) {
 	for(var i = 1; i < xy.length; i += 2){
@@ -124,7 +123,9 @@ window.bve.plotResponse = function(ob, elemid, veopt) {
 	  lasty = y;
 	}
 	opt["ylabels"] =[miny.toPrecision(ydecimals), maxy.toPrecision(ydecimals), lasty.toPrecision(ydecimals)];
+	nicename = nicename + " " + lasty.toPrecision(ydecimals);
       }
+      html += "<div class=\"plot\"><div class=\"plotl\">"+nicename+"</div><canvas class=\"plotc\" id=\"plot_" + elemid + "_" + varname + "\"></canvas></div>";
       toplot[varname] = {"xy":xy, "opt":opt};
     }
   }
